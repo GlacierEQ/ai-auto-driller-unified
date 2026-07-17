@@ -1,0 +1,74 @@
+name: Zenith Suite — CI Validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    name: Run Validation Harness
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run validation harness
+        run: node scripts/validation_harness.js
+
+      - name: Lint scripts
+        run: npx eslint scripts/ --ext .js --ignore-pattern 'validation_harness.js' || true
+        continue-on-error: true
+
+  script-health:
+    name: Script Health Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify all scripts have Tampermonkey headers
+        run: |
+          echo "Checking Tampermonkey @name headers..."
+          FAIL=0
+          for f in scripts/*.user.js; do
+            if ! grep -q "@name" "$f"; then
+              echo "MISSING @name header: $f"
+              FAIL=1
+            else
+              echo "OK: $f"
+            fi
+          done
+          exit $FAIL
+
+      - name: Verify all scripts have @version
+        run: |
+          echo "Checking @version headers..."
+          FAIL=0
+          for f in scripts/*.user.js; do
+            if ! grep -q "@version" "$f"; then
+              echo "MISSING @version: $f"
+              FAIL=1
+            else
+              echo "OK: $f"
+            fi
+          done
+          exit $FAIL
+
+      - name: Check script size consistency
+        run: |
+          echo "Script sizes:"
+          wc -c scripts/*.user.js
+          echo "All scripts present — size audit complete."

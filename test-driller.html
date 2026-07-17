@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Perplexity Auto-Driller Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #1a1a1a;
+            color: white;
+        }
+        #test-output {
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        .log-entry {
+            margin: 5px 0;
+            padding: 5px;
+            border-left: 3px solid #ff6b6b;
+            background: rgba(255,107,107,0.1);
+        }
+        .success { border-left-color: #10b981; background: rgba(16,185,129,0.1); }
+        .error { border-left-color: #ef4444; background: rgba(239,68,68,0.1); }
+        button {
+            background: #ff6b6b;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #ee5a6f;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔥 Perplexity Auto-Driller Test Suite</h1>
+    <p>This page tests the core logic of the userscript without needing Perplexity.ai</p>
+    
+    <div>
+        <button onclick="testMinimizeLogic()">Test Minimize Logic</button>
+        <button onclick="testDrillLogic()">Test Drill Logic</button>
+        <button onclick="testConfig()">Test Config</button>
+        <button onclick="clearLogs()">Clear Logs</button>
+    </div>
+
+    <div id="test-output"></div>
+
+    <script>
+        // Mock GM functions
+        const storage = {};
+        window.GM_getValue = (key, defaultValue) => {
+            return storage[key] !== undefined ? storage[key] : defaultValue;
+        };
+        window.GM_setValue = (key, value) => {
+            storage[key] = value;
+            log(`Saved ${key} = ${value}`, 'success');
+        };
+
+        // Logging
+        function log(message, type = 'info') {
+            const output = document.getElementById('test-output');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${new Date().toISOString()}] ${message}`;
+            output.appendChild(entry);
+            output.scrollTop = output.scrollHeight;
+            console.log(message);
+        }
+
+        function clearLogs() {
+            document.getElementById('test-output').innerHTML = '';
+        }
+
+        // Copy the CONFIG from the userscript
+        const CONFIG = {
+            enabled: GM_getValue('enabled', true),
+            autoApprove: GM_getValue('autoApprove', true),
+            autoDrill: GM_getValue('autoDrill', true),
+            maxDrillDepth: GM_getValue('maxDrillDepth', 5),
+            drillInterval: GM_getValue('drillInterval', 5000),
+            approveInterval: GM_getValue('approveInterval', 200),
+            intelligentMode: GM_getValue('intelligentMode', true),
+            typingSpeed: GM_getValue('typingSpeed', 40),
+            debug: GM_getValue('debug', true),
+            minimized: GM_getValue('minimized', false)
+        };
+
+        function testConfig() {
+            log('=== TESTING CONFIGURATION ===');
+            log(`autoDrill: ${CONFIG.autoDrill}`, CONFIG.autoDrill ? 'success' : 'error');
+            log(`autoApprove: ${CONFIG.autoApprove}`, CONFIG.autoApprove ? 'success' : 'error');
+            log(`debug: ${CONFIG.debug}`, CONFIG.debug ? 'success' : 'error');
+            log(`minimized: ${CONFIG.minimized}`);
+            log(`maxDrillDepth: ${CONFIG.maxDrillDepth}`);
+            log(`drillInterval: ${CONFIG.drillInterval}ms`);
+            
+            if (CONFIG.autoDrill) {
+                log('✅ Auto-Drill is ENABLED by default', 'success');
+            } else {
+                log('❌ Auto-Drill is DISABLED - BUG!', 'error');
+            }
+        }
+
+        function testMinimizeLogic() {
+            log('=== TESTING MINIMIZE LOGIC ===');
+            
+            // Create mock panel
+            const panel = document.createElement('div');
+            panel.id = 'test-panel';
+            const content = document.createElement('div');
+            content.id = 'panel-content';
+            panel.appendChild(content);
+            document.body.appendChild(panel);
+            
+            // Test initial state
+            log('Initial state: minimized = ' + CONFIG.minimized);
+            
+            // Simulate minimize button click
+            function minimizeClick() {
+                const isCurrentlyMinimized = panel.classList.contains('panel-minimized');
+                log(`Current state: ${isCurrentlyMinimized ? 'minimized' : 'expanded'}`);
+                
+                if (isCurrentlyMinimized) {
+                    content.style.display = 'block';
+                    panel.classList.remove('panel-minimized');
+                    CONFIG.minimized = false;
+                    log('Expanding panel...', 'success');
+                } else {
+                    content.style.display = 'none';
+                    panel.classList.add('panel-minimized');
+                    CONFIG.minimized = true;
+                    log('Minimizing panel...', 'success');
+                }
+                
+                GM_setValue('minimized', CONFIG.minimized);
+            }
+            
+            // Test multiple clicks
+            log('Clicking minimize button (1)...');
+            minimizeClick();
+            log('Panel classList: ' + panel.className);
+            log('Content display: ' + content.style.display);
+            
+            log('Clicking minimize button (2)...');
+            minimizeClick();
+            log('Panel classList: ' + panel.className);
+            log('Content display: ' + content.style.display);
+            
+            log('Clicking minimize button (3)...');
+            minimizeClick();
+            log('Panel classList: ' + panel.className);
+            log('Content display: ' + content.style.display);
+            
+            if (panel.classList.contains('panel-minimized') && content.style.display === 'none') {
+                log('✅ Minimize logic works correctly!', 'success');
+            } else {
+                log('❌ Minimize logic FAILED!', 'error');
+            }
+            
+            document.body.removeChild(panel);
+        }
+
+        function testDrillLogic() {
+            log('=== TESTING DRILL LOGIC ===');
+            
+            const STATE = {
+                drillCount: 0,
+                isProcessing: false,
+                lastDrillTime: 0,
+                conversationHistory: []
+            };
+            
+            // Test drill conditions
+            log(`autoDrill enabled: ${CONFIG.autoDrill}`, CONFIG.autoDrill ? 'success' : 'error');
+            log(`Max depth: ${CONFIG.maxDrillDepth}`);
+            log(`Interval: ${CONFIG.drillInterval}ms`);
+            
+            // Simulate drill attempt
+            function attemptDrill() {
+                if (!CONFIG.autoDrill) {
+                    log('❌ Auto-drill is disabled!', 'error');
+                    return false;
+                }
+                
+                if (STATE.drillCount >= CONFIG.maxDrillDepth) {
+                    log(`❌ Max depth (${CONFIG.maxDrillDepth}) reached`, 'error');
+                    return false;
+                }
+                
+                const now = Date.now();
+                if (now - STATE.lastDrillTime < CONFIG.drillInterval) {
+                    const remaining = Math.ceil((CONFIG.drillInterval - (now - STATE.lastDrillTime)) / 1000);
+                    log(`⏳ Cooldown active: ${remaining}s remaining`);
+                    return false;
+                }
+                
+                // Simulate successful drill
+                STATE.drillCount++;
+                STATE.lastDrillTime = now;
+                log(`✅ Drill #${STATE.drillCount} would be submitted!`, 'success');
+                return true;
+            }
+            
+            // Test multiple drill attempts
+            log('Attempting drill 1...');
+            attemptDrill();
+            
+            log('Attempting drill 2 immediately (should be blocked by cooldown)...');
+            attemptDrill();
+            
+            log(`Waiting ${CONFIG.drillInterval}ms...`);
+            setTimeout(() => {
+                log('Attempting drill 2 after cooldown...');
+                attemptDrill();
+            }, CONFIG.drillInterval + 100);
+        }
+
+        // Auto-run basic tests
+        window.addEventListener('load', () => {
+            log('🔥 Auto-Driller Test Suite Loaded');
+            log('Click buttons above to run tests');
+            testConfig();
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,34 @@
+{
+  "name": "ai-auto-driller-unified",
+  "version": "4.0.0",
+  "description": "UNIFIED SUITE: Elite strategic automation for 8 AI platforms. Merged from chatgpt_infinity + auto-driller-pro-max.",
+  "author": "GlacierEQ",
+  "license": "MIT",
+  "homepage": "https://github.com/GlacierEQ/ai-auto-driller-pro-max",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GlacierEQ/ai-auto-driller-pro-max.git"
+  },
+  "scripts": {
+    "test": "node scripts/validation_harness.js",
+    "validate": "node scripts/validation_harness.js",
+    "lint": "eslint scripts/ --ext .js"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0"
+  },
+  "keywords": [
+    "tampermonkey",
+    "userscript",
+    "automation",
+    "chatgpt",
+    "perplexity",
+    "grok",
+    "gemini",
+    "claude",
+    "deepseek",
+    "ollama",
+    "ai-automation",
+    "apex-nexus"
+  ]
+}
