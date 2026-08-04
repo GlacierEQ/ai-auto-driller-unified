@@ -1,17 +1,19 @@
 {
   "name": "ai-auto-driller-unified",
-  "version": "4.0.0",
-  "description": "UNIFIED SUITE: Elite strategic automation for 8 AI platforms. Merged from chatgpt_infinity + auto-driller-pro-max.",
+  "version": "5.0.0",
+  "description": "Hardened cross-platform Auto Driller userscript with verified browser actions, platform adapters, audit export, and legacy platform scripts.",
   "author": "GlacierEQ",
   "license": "MIT",
-  "homepage": "https://github.com/GlacierEQ/ai-auto-driller-pro-max",
+  "homepage": "https://github.com/GlacierEQ/ai-auto-driller-unified",
   "repository": {
     "type": "git",
-    "url": "https://github.com/GlacierEQ/ai-auto-driller-pro-max.git"
+    "url": "https://github.com/GlacierEQ/ai-auto-driller-unified.git"
   },
   "scripts": {
-    "test": "node scripts/validation_harness.js",
-    "validate": "node scripts/validation_harness.js",
+    "test": "npm run test:legacy && npm run test:master",
+    "test:legacy": "node scripts/validation_harness.js",
+    "test:master": "node scripts/master_validation_harness.js",
+    "validate": "npm test",
     "lint": "eslint scripts/ --ext .js"
   },
   "devDependencies": {
@@ -19,16 +21,20 @@
   },
   "keywords": [
     "tampermonkey",
+    "violentmonkey",
     "userscript",
-    "automation",
+    "browser-automation",
     "chatgpt",
     "perplexity",
     "grok",
     "gemini",
     "claude",
     "deepseek",
+    "kimi",
+    "qwen",
+    "cohere",
     "ollama",
     "ai-automation",
-    "apex-nexus"
+    "audit"
   ]
 }
