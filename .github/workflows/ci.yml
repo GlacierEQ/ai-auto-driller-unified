@@ -7,39 +7,9 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply-release-edge-fixes:
-    name: Apply final release edge fixes
-    if: github.event_name == 'pull_request' && github.head_ref == 'feat/auto-driller-v5-master'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout release branch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-
-      - name: Apply and validate edge fixes
-        run: |
-          set -euo pipefail
-          git apply --check .github/v5-release-fix.patch
-          git apply .github/v5-release-fix.patch
-          rm .github/v5-release-fix.patch
-          node --check scripts/auto-driller-master.user.js
-          node scripts/master_validation_harness.js
-
-      - name: Commit edge fixes
-        run: |
-          set -euo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add scripts/auto-driller-master.user.js scripts/master_validation_harness.js .github/v5-release-fix.patch
-          git commit -m "fix: close final Auto Driller v5 release edge cases"
-          git push origin HEAD:${{ github.head_ref }}
-
   validate:
     name: Run legacy and master validation
     runs-on: ubuntu-latest
@@ -93,6 +63,8 @@ jobs:
           grep -F 'assertOperationActive(operationGeneration)' "$SCRIPT"
           grep -F 'clearTimeout(state.baselineTimer)' "$SCRIPT"
           grep -F 'if (!candidate.strong || !candidate.text) return' "$SCRIPT"
+          grep -F 'Date.now() - rootsCachedAt < 750' "$SCRIPT"
+          grep -F 'state.backoffUntil = 0' "$SCRIPT"
 
       - name: Check script sizes
         run: |
