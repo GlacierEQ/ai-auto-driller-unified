@@ -63,6 +63,7 @@
       input: ['#prompt-textarea', 'textarea[placeholder*="Message" i]', '[contenteditable="true"][role="textbox"]'],
       submit: ['button[data-testid="send-button"]', 'button[aria-label*="Send" i]'],
       response: ['[data-message-author-role="assistant"]', 'article [data-message-author-role="assistant"]'],
+      strongResponseCount: 2,
       busy: ['button[data-testid="stop-button"]', 'button[aria-label*="Stop" i]', '[class*="result-streaming"]']
     },
     {
@@ -71,6 +72,7 @@
       input: ['div[contenteditable="true"][role="textbox"]', '.ProseMirror[contenteditable="true"]', 'textarea'],
       submit: ['button[aria-label*="Send" i]', 'button[type="submit"]'],
       response: ['[data-testid*="assistant" i]', '[data-is-streaming]', '.font-claude-response', '.prose'],
+      strongResponseCount: 3,
       busy: ['button[aria-label*="Stop" i]', '[data-is-streaming="true"]', '[class*="generating"]']
     },
     {
@@ -79,6 +81,7 @@
       input: ['rich-textarea [contenteditable="true"]', '.ql-editor[contenteditable="true"]', 'div[contenteditable="true"][role="textbox"]', 'textarea'],
       submit: ['button[aria-label*="Send" i]', 'button[aria-label*="Submit" i]', '.send-button'],
       response: ['model-response', '[data-test-id*="model-response" i]', '.model-response-text', '.markdown'],
+      strongResponseCount: 3,
       busy: ['button[aria-label*="Stop" i]', '[class*="loading"]', '[class*="generating"]']
     },
     {
@@ -87,6 +90,7 @@
       input: ['textarea[placeholder*="Ask" i]', 'textarea[role="textbox"]', 'textarea', '[contenteditable="true"][role="textbox"]'],
       submit: ['button[type="submit"]', 'button[aria-label*="Submit" i]', 'button[aria-label*="Send" i]'],
       response: ['[data-testid*="answer" i]', '[class*="answer"] .prose', 'article .prose', '.prose'],
+      strongResponseCount: 2,
       busy: ['[aria-busy="true"]', 'button[aria-label*="Stop" i]', '[class*="generating"]']
     },
     {
@@ -96,6 +100,7 @@
       input: ['textarea', 'div[contenteditable="true"][role="textbox"]', 'div[contenteditable="true"]'],
       submit: ['button[aria-label*="Send" i]', 'button[type="submit"]'],
       response: ['[data-testid*="message" i]', '[class*="response"]', '.markdown', '.prose'],
+      strongResponseCount: 1,
       busy: ['button[aria-label*="Stop" i]', '[class*="generating"]', '[aria-busy="true"]']
     },
     {
@@ -104,6 +109,7 @@
       input: ['textarea', 'div[contenteditable="true"][role="textbox"]'],
       submit: ['button[class*="send" i]', 'button[aria-label*="Send" i]', 'button[type="submit"]'],
       response: ['.ds-markdown', '[class*="markdown"]', '[class*="response"]', '.prose'],
+      strongResponseCount: 1,
       busy: ['ds-loading', 'button[aria-label*="Stop" i]', '[class*="loading"]', '[class*="generating"]']
     },
     {
@@ -112,6 +118,7 @@
       input: ['textarea', 'div[contenteditable="true"][role="textbox"]', 'div[contenteditable="true"]'],
       submit: ['button[aria-label*="发送" i]', 'button[aria-label*="Send" i]', 'button[type="submit"]'],
       response: ['[class*="segment-content"]', '[class*="markdown"]', '[class*="response"]', '[class*="message"]'],
+      strongResponseCount: 1,
       busy: ['[aria-busy="true"]', '[class*="generating"]', '[class*="typing"]']
     },
     {
@@ -120,6 +127,7 @@
       input: ['textarea', 'div[contenteditable="true"][role="textbox"]', 'div[contenteditable="true"]'],
       submit: ['button[aria-label*="发送" i]', 'button[aria-label*="Send" i]', 'button[type="submit"]'],
       response: ['[class*="answer"] [class*="markdown"]', '.markdown-body', '[class*="response"]', '[class*="message"]'],
+      strongResponseCount: 1,
       busy: ['[aria-busy="true"]', '[class*="generating"]', '[class*="typing"]']
     },
     {
@@ -128,6 +136,7 @@
       input: ['textarea', 'div[contenteditable="true"][role="textbox"]', 'div[contenteditable="true"]'],
       submit: ['button[aria-label*="Send" i]', 'button[type="submit"]'],
       response: ['[data-testid*="assistant" i]', '[class*="response"]', '.markdown', '.prose'],
+      strongResponseCount: 1,
       busy: ['[aria-busy="true"]', '[class*="generating"]', '[class*="spinner"]']
     },
     {
@@ -136,6 +145,7 @@
       input: ['[role="dialog"] textarea', '[role="dialog"] [contenteditable="true"]'],
       submit: ['[role="dialog"] button[type="submit"]', '[role="dialog"] button[aria-label*="Send" i]'],
       response: ['[role="dialog"] [class*="notion-ai"]', '[role="dialog"] .notion-page-content', '[role="dialog"] .prose'],
+      strongResponseCount: 1,
       busy: ['[role="dialog"] [aria-busy="true"]', '[role="dialog"] [class*="loading"]']
     },
     {
@@ -144,6 +154,7 @@
       input: ['#chat-input', 'textarea[placeholder*="message" i]', 'textarea', 'div[contenteditable="true"][role="textbox"]'],
       submit: ['button[aria-label*="Send" i]', 'button[type="submit"]', '#send-button'],
       response: ['[data-message-role="assistant"]', '.message.assistant', '[class*="assistant"] .prose', '.prose'],
+      strongResponseCount: 3,
       busy: ['button[aria-label*="Stop" i]', '[aria-busy="true"]', '[class*="generating"]']
     }
   ];
@@ -170,6 +181,7 @@
   config.userQuietMs = clampNumber(config.userQuietMs, 0, 120000, DEFAULTS.userQuietMs);
   config.responseStableMs = clampNumber(config.responseStableMs, 500, 10000, DEFAULTS.responseStableMs);
   if (platform.manualOnly) config.autoDrill = false;
+  if (!platform.approval) config.autoAccept = false;
 
   const state = {
     startedAt: Date.now(),
@@ -182,7 +194,8 @@
     lastHandledHash: '',
     candidateHash: '',
     candidateSince: 0,
-    lastResponseText: '',
+    operationGeneration: 0,
+    baselineTimer: 0,
     currentUrl: location.href,
     history: [],
     audit: [],
@@ -311,17 +324,25 @@
 
   const firstVisible = (selectors) => queryAll(selectors).find(isVisible) || null;
   const responseScore = (element) => {
-    const signature = normalize([
-      element.getAttribute('data-message-author-role') || '',
-      element.getAttribute('data-testid') || '',
-      element.getAttribute('aria-label') || '',
-      element.getAttribute('role') || '',
-      element.className || ''
-    ].join(' ')).toLowerCase();
+    const parts = [];
+    let cursor = element;
+    for (let depth = 0; cursor && depth < 5; depth += 1, cursor = cursor.parentElement) {
+      parts.push(
+        cursor.getAttribute('data-message-author-role') || '',
+        cursor.getAttribute('data-message-role') || '',
+        cursor.getAttribute('data-testid') || '',
+        cursor.getAttribute('aria-label') || '',
+        cursor.getAttribute('role') || '',
+        cursor.className || ''
+      );
+    }
+    const signature = normalize(parts.join(' ')).toLowerCase();
     let score = 0;
-    if (/(assistant|model|answer|response|claude|gemini)/.test(signature)) score += 8;
+    if (/(assistant|model|answer|response|claude|gemini|notion-ai)/.test(signature)) score += 12;
     if (/(markdown|prose)/.test(signature)) score += 2;
-    if (/(user|human|prompt|composer|input)/.test(signature)) score -= 12;
+    if (/(message|segment-content|notion-ai|markdown-body|ds-markdown)/.test(signature)) score += 1;
+    if (/(user|human|prompt|composer|input|navigation|sidebar)/.test(signature)) score -= 20;
+    if (element.closest('form, textarea, [contenteditable="true"]')) score -= 30;
     return score;
   };
   const compareDocumentOrder = (left, right) => {
@@ -330,9 +351,13 @@
     if (relation & Node.DOCUMENT_POSITION_PRECEDING) return 1;
     return 0;
   };
-  const lastVisible = (selectors, minLength = 0) => {
+  const lastVisible = (selectors, minLength = 0, minimumScore = Number.NEGATIVE_INFINITY) => {
     const matches = queryAll(selectors)
-      .filter((element) => isVisible(element) && normalize(element.textContent).length >= minLength)
+      .filter((element) => (
+        isVisible(element) &&
+        normalize(element.textContent).length >= minLength &&
+        responseScore(element) >= minimumScore
+      ))
       .sort((left, right) => responseScore(left) - responseScore(right) || compareDocumentOrder(left, right));
     return matches.length ? matches[matches.length - 1] : null;
   };
@@ -408,10 +433,18 @@
     return null;
   };
 
-  const getResponseText = () => {
-    const response = lastVisible(platform.response, 30);
-    return normalize(response?.textContent);
+  const getResponseCandidate = ({ allowFallback = false } = {}) => {
+    const strongCount = Math.max(0, Math.min(platform.response.length, platform.strongResponseCount || 0));
+    const strongSelectors = platform.response.slice(0, strongCount);
+    const fallbackSelectors = platform.response.slice(strongCount);
+    const strong = strongSelectors.length ? lastVisible(strongSelectors, 4, 1) : null;
+    if (strong) return { element: strong, text: normalize(strong.textContent), strong: true };
+    if (!allowFallback || !fallbackSelectors.length) return { element: null, text: '', strong: false };
+    const fallback = lastVisible(fallbackSelectors, 4, 1);
+    return { element: fallback, text: normalize(fallback?.textContent), strong: false };
   };
+
+  const getResponseText = (allowFallback = false) => getResponseCandidate({ allowFallback }).text;
 
   const hashText = (text) => {
     let hash = 2166136261;
@@ -422,13 +455,7 @@
     return (hash >>> 0).toString(36);
   };
 
-  const isBusy = () => platform.busy.some((selector) => {
-    try {
-      return queryAll([selector]).some(isVisible);
-    } catch {
-      return false;
-    }
-  });
+  const isBusy = () => queryAll(platform.busy).some(isVisible);
 
   const waitUntil = async (predicate, timeoutMs, intervalMs = 120) => {
     const deadline = Date.now() + timeoutMs;
@@ -479,33 +506,40 @@
   };
 
   const safeAutoAccept = () => {
-    if (!config.autoAccept) return;
-    const allowedLabels = new Set([
-      'allow', 'allow once', 'approve', 'accept', 'confirm', 'continue', 'run', 'run tool',
-      '允许', '确认', '继续', '运行'
-    ]);
-    for (const button of queryAll(['button', '[role="button"]'])) {
+    const approval = platform.approval;
+    if (!config.enabled || !config.autoAccept || !approval) return;
+    const allowedLabels = new Set(approval.labels || []);
+    for (const button of queryAll(approval.buttons || [])) {
       if (!isVisible(button) || state.clickedApprovals.has(button)) continue;
-      const label = normalize(`${button.textContent || ''} ${button.getAttribute('aria-label') || ''}`).toLowerCase();
+      const textLabel = normalize(button.textContent || '').toLowerCase();
+      const ariaLabel = normalize(button.getAttribute('aria-label') || '').toLowerCase();
+      const label = allowedLabels.has(textLabel) ? textLabel : ariaLabel;
       if (!allowedLabels.has(label)) continue;
-      if (/(always|remember|delete|remove|purchase|pay|send email|publish|merge|overwrite|share|post)/i.test(label)) continue;
-      const container = button.closest('[role="dialog"], [data-testid*="tool" i], [class*="tool" i], [class*="permission" i], [class*="confirm" i]');
+      const container = button.closest(approval.container);
       if (!container) continue;
       const context = normalize(container.textContent).toLowerCase();
-      if (/(delete|remove|purchase|payment|send email|publish|merge|overwrite|share publicly|post publicly|submit order)/i.test(context)) continue;
-      if (!/(tool|permission|allow|approve|confirm|continue|run|execute|action|access|允许|确认|运行)/i.test(context)) continue;
+      if (!approval.requestPattern.test(context) || approval.denyPattern.test(context)) continue;
       state.clickedApprovals.add(button);
       button.click();
       audit('approval.clicked', { label });
     }
   };
 
-  const verifySubmissionStarted = async (input, previousHash) => {
+  const verifySubmissionStarted = async (input, previousHash, allowFallback = false) => {
     return waitUntil(() => {
       const inputCleared = normalize(elementValue(input)).length === 0;
-      const responseHash = hashText(getResponseText());
-      return isBusy() || inputCleared || (responseHash && responseHash !== previousHash);
+      const responseText = getResponseText(allowFallback);
+      const responseHash = responseText ? hashText(responseText) : '';
+      return isBusy() || inputCleared || Boolean(responseHash && responseHash !== previousHash);
     }, 5500);
+  };
+
+  const assertOperationActive = (generation) => {
+    if (!config.enabled || generation !== state.operationGeneration) {
+      const error = new Error('Operation cancelled');
+      error.name = 'AbortError';
+      throw error;
+    }
   };
 
   const submitDrill = async ({ manual = false } = {}) => {
@@ -521,7 +555,7 @@
     if (!manual && Date.now() - state.lastTrustedActivityAt < config.userQuietMs) return false;
     if (isBusy()) return false;
 
-    const responseText = getResponseText();
+    const responseText = getResponseText(manual);
     if (!responseText) {
       setStatus('No response found');
       audit('drill.blocked', { reason: 'no-response' });
@@ -532,31 +566,38 @@
     if (!manual && responseHash === state.lastHandledHash) return false;
 
     state.processing = true;
+    const operationGeneration = state.operationGeneration;
     setStatus('Preparing');
     const generated = generateQuestion(responseText);
     audit('drill.preparing', { category: generated.category, responseHash });
 
     try {
       const input = await waitUntil(() => getInput(), 4000) ? getInput() : null;
+      assertOperationActive(operationGeneration);
       if (!input) throw new Error('Prompt input not found');
       if (normalize(elementValue(input))) throw new Error('Prompt input is not empty');
 
+      assertOperationActive(operationGeneration);
       setInputValue(input, generated.question);
       const inserted = await waitUntil(
         () => normalize(elementValue(input)).includes(normalize(generated.question).slice(0, 24)),
         1800
       );
+      assertOperationActive(operationGeneration);
       if (!inserted) throw new Error('Prompt injection could not be verified');
 
       const submitButton = getSubmitButton(input);
+      assertOperationActive(operationGeneration);
       if (submitButton) submitButton.click();
       else pressEnter(input);
 
-      let started = await verifySubmissionStarted(input, responseHash);
+      let started = await verifySubmissionStarted(input, responseHash, manual);
       if (!started && submitButton) {
+        assertOperationActive(operationGeneration);
         pressEnter(input);
-        started = await verifySubmissionStarted(input, responseHash);
+        started = await verifySubmissionStarted(input, responseHash, manual);
       }
+      assertOperationActive(operationGeneration);
       if (!started) throw new Error('Submission could not be verified');
 
       state.drillCount += 1;
@@ -576,6 +617,11 @@
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (error instanceof Error && error.name === 'AbortError') {
+        audit('drill.cancelled', { reason: message });
+        setStatus('Cancelled');
+        return false;
+      }
       state.consecutiveFailures += 1;
       const backoffMs = Math.min(30000, 2000 * (2 ** (state.consecutiveFailures - 1)));
       state.backoffUntil = Date.now() + backoffMs;
@@ -588,13 +634,13 @@
   };
 
   const observeResponse = () => {
-    const text = getResponseText();
-    if (!text) return;
+    const candidate = getResponseCandidate();
+    if (!candidate.strong || !candidate.text) return;
+    const text = candidate.text;
     const hash = hashText(text);
     if (hash !== state.candidateHash) {
       state.candidateHash = hash;
       state.candidateSince = Date.now();
-      state.lastResponseText = text;
       return;
     }
     if (
@@ -645,11 +691,11 @@
     if (document.getElementById(HUD_ID)) return;
     const host = document.createElement('div');
     host.id = HUD_ID;
+    host.style.all = 'initial';
     host.style.position = 'fixed';
     host.style.top = '16px';
     host.style.right = '16px';
     host.style.zIndex = '2147483647';
-    host.style.all = 'initial';
     document.documentElement.appendChild(host);
 
     const shadow = host.attachShadow({ mode: 'open' });
@@ -691,7 +737,7 @@
         }
         button.action.primary { background: ${platform.color}; border-color: transparent; grid-column: 1 / -1; font-weight: 700; }
         button.action:hover { filter: brightness(1.12); }
-        #manual { color: #fbbf24; font-size: 11px; margin-top: 8px; }
+        .notice { color: #fbbf24; font-size: 11px; margin-top: 8px; }
       </style>
       <div id="panel">
         <div id="header">
@@ -701,10 +747,11 @@
         <div id="body">
           <div class="row"><label>Enabled</label><input id="enabled" type="checkbox"></div>
           <div class="row"><label>Auto drill</label><input id="autoDrill" type="checkbox" ${platform.manualOnly ? 'disabled' : ''}></div>
-          <div class="row"><label>Safe auto-accept</label><input id="autoAccept" type="checkbox"></div>
+          <div class="row"><label>Safe auto-accept</label><input id="autoAccept" type="checkbox" ${platform.approval ? '' : 'disabled'}></div>
           <div class="row"><label>Max depth</label><input id="maxDepth" type="number" min="1" max="50"></div>
           <div class="row"><label>Interval (seconds)</label><input id="interval" type="number" min="3" max="120" step="1"></div>
-          ${platform.manualOnly ? '<div id="manual">Notion runs in manual-only mode to avoid typing into ordinary pages.</div>' : ''}
+          ${platform.manualOnly ? '<div class="notice">Notion runs in manual-only mode to avoid typing into ordinary pages.</div>' : ''}
+          ${platform.approval ? '' : '<div class="notice">Auto-accept stays disabled until this provider has an explicit approval adapter.</div>'}
           <div id="status">Starting</div>
           <div id="stats"><span id="count">0 drills</span><span id="platform">${platform.id}</span></div>
           <div id="actions">
@@ -726,6 +773,8 @@
     const bindBoolean = (id, key) => byId(id).addEventListener('change', (event) => {
       config[key] = Boolean(event.target.checked);
       if (key === 'autoDrill' && platform.manualOnly) config[key] = false;
+      if (key === 'autoAccept' && !platform.approval) config[key] = false;
+      if (key === 'enabled' && !config.enabled) state.operationGeneration += 1;
       persistConfig();
       audit('config.changed', { key, value: config[key] });
     });
@@ -799,13 +848,18 @@
   const handleRouteChange = () => {
     if (location.href === state.currentUrl) return;
     state.currentUrl = location.href;
+    state.operationGeneration += 1;
     state.drillCount = 0;
     state.consecutiveFailures = 0;
     state.backoffUntil = 0;
     state.lastHandledHash = '';
     state.candidateHash = '';
     state.candidateSince = Date.now();
-    setTimeout(seedResponseBaseline, 700);
+    clearTimeout(state.baselineTimer);
+    const scheduledUrl = state.currentUrl;
+    state.baselineTimer = setTimeout(() => {
+      if (location.href === scheduledUrl) seedResponseBaseline();
+    }, 700);
     audit('route.changed');
   };
 
@@ -823,12 +877,11 @@
   };
 
   const seedResponseBaseline = () => {
-    const current = getResponseText();
+    const current = getResponseText() || getResponseText(true);
     const hash = current ? hashText(current) : '';
     state.lastHandledHash = hash;
     state.candidateHash = hash;
     state.candidateSince = Date.now();
-    state.lastResponseText = current;
     setStatus(platform.manualOnly ? 'Ready — manual only' : 'Ready');
     audit('runtime.ready', { initialResponseHash: hash || null });
   };
@@ -863,6 +916,7 @@
       audit('config.changed', { key: 'autoDrill', value: config.autoDrill });
     });
     GM_registerMenuCommand('Auto Driller: Emergency stop', () => {
+      state.operationGeneration += 1;
       config.enabled = false;
       config.autoDrill = false;
       config.autoAccept = false;
@@ -881,7 +935,7 @@
         void submitDrill({ manual: true });
       }
     }, true);
-    setTimeout(seedResponseBaseline, 900);
+    state.baselineTimer = setTimeout(seedResponseBaseline, 900);
     state.ticker = setInterval(tick, 700);
   };
 
