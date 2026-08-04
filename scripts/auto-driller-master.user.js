@@ -92,7 +92,7 @@
     {
       id: 'grok', name: 'Grok', color: '#e11d8a',
       hosts: [/^grok\.com$/, /^x\.com$/],
-      path: /^\/i\/grok|.*/,
+      scope: (host, pathname) => host === 'grok.com' || /^\/i\/grok/.test(pathname),
       input: ['textarea', 'div[contenteditable="true"][role="textbox"]', 'div[contenteditable="true"]'],
       submit: ['button[aria-label*="Send" i]', 'button[type="submit"]'],
       response: ['[data-testid*="message" i]', '[class*="response"]', '.markdown', '.prose'],
@@ -150,12 +150,25 @@
 
   const platform = PLATFORM_DEFINITIONS.find((candidate) => {
     const hostMatch = candidate.hosts.some((rule) => rule.test(location.hostname));
-    return hostMatch && (!candidate.path || candidate.path.test(location.pathname));
+    return hostMatch && (!candidate.scope || candidate.scope(location.hostname, location.pathname));
   });
   if (!platform) return;
 
   const storedConfig = GM_getValue(`${STORE_KEY}:config`, {});
   const config = { ...DEFAULTS, ...(storedConfig && typeof storedConfig === 'object' ? storedConfig : {}) };
+  const clampNumber = (value, minimum, maximum, fallback) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? Math.max(minimum, Math.min(maximum, numeric)) : fallback;
+  };
+  config.enabled = Boolean(config.enabled);
+  config.autoDrill = Boolean(config.autoDrill);
+  config.autoAccept = Boolean(config.autoAccept);
+  config.debug = Boolean(config.debug);
+  config.minimized = Boolean(config.minimized);
+  config.maxDrillDepth = Math.round(clampNumber(config.maxDrillDepth, 1, 50, DEFAULTS.maxDrillDepth));
+  config.drillIntervalMs = clampNumber(config.drillIntervalMs, 3000, 120000, DEFAULTS.drillIntervalMs);
+  config.userQuietMs = clampNumber(config.userQuietMs, 0, 120000, DEFAULTS.userQuietMs);
+  config.responseStableMs = clampNumber(config.responseStableMs, 500, 10000, DEFAULTS.responseStableMs);
   if (platform.manualOnly) config.autoDrill = false;
 
   const state = {
@@ -163,6 +176,8 @@
     drillCount: 0,
     processing: false,
     lastDrillAt: 0,
+    consecutiveFailures: 0,
+    backoffUntil: 0,
     lastTrustedActivityAt: 0,
     lastHandledHash: '',
     candidateHash: '',
@@ -250,21 +265,27 @@
       element.getAttribute('aria-disabled') !== 'true';
   };
 
+  let cachedRoots = [document];
+  let rootsCachedAt = 0;
   const collectRoots = () => {
+    if (Date.now() - rootsCachedAt < 5000) return cachedRoots;
     const roots = [document];
-    const queue = [document.documentElement];
-    const visited = new Set(queue);
-    while (queue.length) {
-      const node = queue.shift();
-      if (!(node instanceof Element)) continue;
-      if (node.shadowRoot && !roots.includes(node.shadowRoot)) roots.push(node.shadowRoot);
-      for (const child of node.children) {
-        if (!visited.has(child)) {
-          visited.add(child);
-          queue.push(child);
-        }
+    const rootQueue = [document];
+    const discoveredRoots = new Set(rootQueue);
+    while (rootQueue.length) {
+      const root = rootQueue.shift();
+      const elements = root === document
+        ? [document.documentElement, ...document.querySelectorAll('*')]
+        : [...root.querySelectorAll('*')];
+      for (const element of elements) {
+        if (!(element instanceof Element) || !element.shadowRoot || discoveredRoots.has(element.shadowRoot)) continue;
+        discoveredRoots.add(element.shadowRoot);
+        roots.push(element.shadowRoot);
+        rootQueue.push(element.shadowRoot);
       }
     }
+    cachedRoots = roots;
+    rootsCachedAt = Date.now();
     return roots;
   };
 
@@ -289,8 +310,30 @@
   };
 
   const firstVisible = (selectors) => queryAll(selectors).find(isVisible) || null;
+  const responseScore = (element) => {
+    const signature = normalize([
+      element.getAttribute('data-message-author-role') || '',
+      element.getAttribute('data-testid') || '',
+      element.getAttribute('aria-label') || '',
+      element.getAttribute('role') || '',
+      element.className || ''
+    ].join(' ')).toLowerCase();
+    let score = 0;
+    if (/(assistant|model|answer|response|claude|gemini)/.test(signature)) score += 8;
+    if (/(markdown|prose)/.test(signature)) score += 2;
+    if (/(user|human|prompt|composer|input)/.test(signature)) score -= 12;
+    return score;
+  };
+  const compareDocumentOrder = (left, right) => {
+    const relation = left.compareDocumentPosition(right);
+    if (relation & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+    if (relation & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+    return 0;
+  };
   const lastVisible = (selectors, minLength = 0) => {
-    const matches = queryAll(selectors).filter((element) => isVisible(element) && normalize(element.textContent).length >= minLength);
+    const matches = queryAll(selectors)
+      .filter((element) => isVisible(element) && normalize(element.textContent).length >= minLength)
+      .sort((left, right) => responseScore(left) - responseScore(right) || compareDocumentOrder(left, right));
     return matches.length ? matches[matches.length - 1] : null;
   };
 
@@ -313,6 +356,7 @@
 
   const setContentEditableValue = (element, value) => {
     element.focus();
+    element.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: value }));
     const selection = window.getSelection();
     const range = document.createRange();
     range.selectNodeContents(element);
@@ -323,7 +367,6 @@
     range.collapse(false);
     selection?.removeAllRanges();
     selection?.addRange(range);
-    element.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, inputType: 'insertText', data: value }));
     element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
     element.dispatchEvent(new Event('change', { bubbles: true }));
   };
@@ -443,11 +486,14 @@
     ]);
     for (const button of queryAll(['button', '[role="button"]'])) {
       if (!isVisible(button) || state.clickedApprovals.has(button)) continue;
-      const label = normalize(`${button.textContent} ${button.getAttribute('aria-label')}`).toLowerCase();
+      const label = normalize(`${button.textContent || ''} ${button.getAttribute('aria-label') || ''}`).toLowerCase();
       if (!allowedLabels.has(label)) continue;
-      if (/(always|remember|delete|remove|purchase|pay|send email|publish|merge)/i.test(label)) continue;
+      if (/(always|remember|delete|remove|purchase|pay|send email|publish|merge|overwrite|share|post)/i.test(label)) continue;
       const container = button.closest('[role="dialog"], [data-testid*="tool" i], [class*="tool" i], [class*="permission" i], [class*="confirm" i]');
       if (!container) continue;
+      const context = normalize(container.textContent).toLowerCase();
+      if (/(delete|remove|purchase|payment|send email|publish|merge|overwrite|share publicly|post publicly|submit order)/i.test(context)) continue;
+      if (!/(tool|permission|allow|approve|confirm|continue|run|execute|action|access|允许|确认|运行)/i.test(context)) continue;
       state.clickedApprovals.add(button);
       button.click();
       audit('approval.clicked', { label });
@@ -466,6 +512,7 @@
     if (state.processing || !config.enabled) return false;
     if (!manual && platform.manualOnly) return false;
     if (!manual && !config.autoDrill) return false;
+    if (!manual && Date.now() < state.backoffUntil) return false;
     if (state.drillCount >= config.maxDrillDepth) {
       setStatus('Depth limit');
       return false;
@@ -514,6 +561,8 @@
 
       state.drillCount += 1;
       state.lastDrillAt = Date.now();
+      state.consecutiveFailures = 0;
+      state.backoffUntil = 0;
       state.lastHandledHash = responseHash;
       state.history.push({
         at: new Date().toISOString(),
@@ -527,8 +576,11 @@
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      audit('drill.failed', { error: message });
-      setStatus(`Blocked: ${message}`);
+      state.consecutiveFailures += 1;
+      const backoffMs = Math.min(30000, 2000 * (2 ** (state.consecutiveFailures - 1)));
+      state.backoffUntil = Date.now() + backoffMs;
+      audit('drill.failed', { error: message, backoffMs, consecutiveFailures: state.consecutiveFailures });
+      setStatus(`Blocked ${Math.ceil(backoffMs / 1000)}s: ${message}`);
       return false;
     } finally {
       state.processing = false;
@@ -748,7 +800,8 @@
     if (location.href === state.currentUrl) return;
     state.currentUrl = location.href;
     state.drillCount = 0;
-    state.history = [];
+    state.consecutiveFailures = 0;
+    state.backoffUntil = 0;
     state.lastHandledHash = '';
     state.candidateHash = '';
     state.candidateSince = Date.now();

@@ -107,6 +107,38 @@ test('Notion is manual only', () => {
   assert(/id:\s*'notion'[\s\S]*?manualOnly:\s*true/.test(source), 'Notion must remain manual-only');
 });
 
+test('Grok routing is host-aware', () => {
+  includes("scope: (host, pathname) => host === 'grok.com' || /^\\/i\\/grok/.test(pathname)");
+  includes("candidate.scope(location.hostname, location.pathname)");
+  assert(!source.includes("path: /^\\/i\\/grok|.*/"), 'Grok routing still contains an all-path alternative');
+});
+
+test('failed submissions use bounded exponential backoff', () => {
+  includes('consecutiveFailures');
+  includes('backoffUntil');
+  includes('Math.min(30000');
+  includes('Date.now() < state.backoffUntil');
+});
+
+test('DOM root discovery is cached', () => {
+  includes('cachedRoots');
+  includes('rootsCachedAt');
+  includes('Date.now() - rootsCachedAt < 5000');
+});
+
+test('auto-accept checks surrounding action context', () => {
+  includes('const context = normalize(container.textContent).toLowerCase()');
+  includes('submit order');
+  includes('share publicly');
+});
+
+test('route changes preserve prior session history', () => {
+  const routeStart = source.indexOf('const handleRouteChange');
+  const routeEnd = source.indexOf('const patchHistory', routeStart);
+  const routeBlock = source.slice(routeStart, routeEnd);
+  assert(!routeBlock.includes('state.history = []'), 'Route change must not erase session history');
+});
+
 test('script size remains bounded', () => {
   assert(Buffer.byteLength(source, 'utf8') < 100_000, 'Master userscript exceeds 100 KB');
   assert(source.split('\n').length < 1200, 'Master userscript exceeds 1200 lines');
