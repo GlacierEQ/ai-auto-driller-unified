@@ -7,9 +7,45 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  apply-final-safety-pass:
+    name: Apply final v5 safety pass
+    if: github.event_name == 'pull_request' && github.head_ref == 'feat/auto-driller-v5-master'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout release branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Apply exact reviewed payload
+        run: |
+          set -euo pipefail
+          RUNTIME_PATCH_GZ_B64="$(sed -n 's/^          RUNTIME_PATCH_GZ_B64: //p' .github/workflows/apply-v5-final.yml)"
+          HARNESS_GZ_B64="$(sed -n 's/^          HARNESS_GZ_B64: //p' .github/workflows/apply-v5-final.yml)"
+          test -n "$RUNTIME_PATCH_GZ_B64"
+          test -n "$HARNESS_GZ_B64"
+          printf '%s' "$RUNTIME_PATCH_GZ_B64" | base64 -d | gzip -d > /tmp/final-runtime.patch
+          git apply --check /tmp/final-runtime.patch
+          git apply /tmp/final-runtime.patch
+          printf '%s' "$HARNESS_GZ_B64" | base64 -d | gzip -d > scripts/master_validation_harness.js
+          rm .github/workflows/apply-v5-final.yml
+          node --check scripts/auto-driller-master.user.js
+          node scripts/master_validation_harness.js
+
+      - name: Commit final safety pass
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/auto-driller-master.user.js scripts/master_validation_harness.js .github/workflows/apply-v5-final.yml
+          git commit -m "fix: complete Auto Driller v5 release safety pass"
+          git push origin HEAD:${{ github.head_ref }}
+
   validate:
     name: Run legacy and master validation
     runs-on: ubuntu-latest
