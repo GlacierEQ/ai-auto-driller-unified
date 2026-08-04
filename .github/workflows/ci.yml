@@ -7,9 +7,235 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  apply-gear-hotfix:
+    name: Apply Gear runtime hotfix
+    if: github.event_name == 'pull_request' && github.head_ref == 'fix/gear-runtime-v5.0.1'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout hotfix branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Patch and validate v5.0.1
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/auto-driller-master.user.js')
+          source = path.read_text()
+
+          def one(old, new):
+              global source
+              if old not in source:
+                  raise SystemExit(f'Missing expected block: {old[:100]!r}')
+              source = source.replace(old, new, 1)
+
+          one('// @version      5.0.0', '// @version      5.0.1')
+          one(
+              '// @match        https://perplexity.ai/*\n',
+              '// @match        https://perplexity.ai/*\n'
+              '// @include      https://chatgpt.com/*\n'
+              '// @include      https://chat.openai.com/*\n'
+              '// @include      https://www.perplexity.ai/*\n'
+              '// @include      https://perplexity.ai/*\n'
+              '// @noframes\n'
+              '// @run-in       normal-tabs\n'
+          )
+          one("const VERSION = '5.0.0';", "const VERSION = '5.0.1';")
+          one(
+              "if (window.top !== window || document.documentElement.dataset[INSTANCE_KEY] === '1') return;",
+              "if (document.documentElement.dataset[INSTANCE_KEY] === '1') return;"
+          )
+
+          one(
+              "input: ['#prompt-textarea', 'textarea[placeholder*=\"Message\" i]', '[contenteditable=\"true\"][role=\"textbox\"]'],\n"
+              "      submit: ['button[data-testid=\"send-button\"]', 'button[aria-label*=\"Send\" i]'],\n"
+              "      response: ['[data-message-author-role=\"assistant\"]', 'article [data-message-author-role=\"assistant\"]'],\n"
+              "      strongResponseCount: 2,",
+              "input: ['#prompt-textarea', '#prompt-textarea[contenteditable=\"true\"]', '[data-testid=\"composer-input\"]', 'textarea[placeholder*=\"Message\" i]', '[contenteditable=\"true\"][role=\"textbox\"]', 'textarea'],\n"
+              "      submit: ['button[data-testid=\"send-button\"]', 'button[data-testid=\"composer-send-button\"]', 'button[aria-label*=\"Send\" i]'],\n"
+              "      response: ['[data-message-author-role=\"assistant\"]', 'main [data-message-author-role=\"assistant\"]', 'article[data-testid^=\"conversation-turn\"] [data-message-author-role=\"assistant\"]', 'main article .markdown', 'main article'],\n"
+              "      strongResponseCount: 3,"
+          )
+
+          one(
+              "input: ['textarea[placeholder*=\"Ask\" i]', 'textarea[role=\"textbox\"]', 'textarea', '[contenteditable=\"true\"][role=\"textbox\"]'],\n"
+              "      submit: ['button[type=\"submit\"]', 'button[aria-label*=\"Submit\" i]', 'button[aria-label*=\"Send\" i]'],\n"
+              "      response: ['[data-testid*=\"answer\" i]', '[class*=\"answer\"] .prose', 'article .prose', '.prose'],\n"
+              "      strongResponseCount: 2,",
+              "input: ['textarea[placeholder*=\"Ask anything\" i]', 'textarea[placeholder*=\"Ask\" i]', 'textarea[role=\"textbox\"]', '[contenteditable=\"true\"][data-lexical-editor=\"true\"]', '[contenteditable=\"true\"][role=\"textbox\"]', 'textarea'],\n"
+              "      submit: ['button[type=\"submit\"]', 'button[data-testid*=\"submit\" i]', 'button[aria-label*=\"Submit\" i]', 'button[aria-label*=\"Send\" i]', 'button[aria-label*=\"Ask\" i]'],\n"
+              "      response: ['[data-testid*=\"answer\" i]', 'main [data-testid*=\"answer\" i]', 'main article [class*=\"prose\"]', 'main article [class*=\"markdown\"]', 'main article', '.prose'],\n"
+              "      strongResponseCount: 4,"
+          )
+
+          one(
+              "  const storedConfig = GM_getValue(`${STORE_KEY}:config`, {});",
+              "  const gmGetValue = typeof GM_getValue === 'function'\n"
+              "    ? GM_getValue\n"
+              "    : (key, fallback) => {\n"
+              "        try {\n"
+              "          const value = localStorage.getItem(key);\n"
+              "          return value === null ? fallback : JSON.parse(value);\n"
+              "        } catch {\n"
+              "          return fallback;\n"
+              "        }\n"
+              "      };\n"
+              "  const gmSetValue = typeof GM_setValue === 'function'\n"
+              "    ? GM_setValue\n"
+              "    : (key, value) => {\n"
+              "        try { localStorage.setItem(key, JSON.stringify(value)); } catch {}\n"
+              "      };\n"
+              "  const gmRegisterMenuCommand = typeof GM_registerMenuCommand === 'function'\n"
+              "    ? GM_registerMenuCommand\n"
+              "    : () => '';\n\n"
+              "  const storedConfig = gmGetValue(`${STORE_KEY}:config`, {});"
+          )
+          source = source.replace('GM_setValue(`${STORE_KEY}:config`', 'gmSetValue(`${STORE_KEY}:config`')
+          source = source.replace('GM_registerMenuCommand(', 'gmRegisterMenuCommand(')
+
+          one(
+              "if (!(element instanceof Element) || !element.isConnected) return false;",
+              "if (!element || element.nodeType !== 1 || !element.isConnected) return false;"
+          )
+          one(
+              "if (!(element instanceof Element) || !element.shadowRoot || discoveredRoots.has(element.shadowRoot)) continue;",
+              "if (!element || element.nodeType !== 1 || !element.shadowRoot || discoveredRoots.has(element.shadowRoot)) continue;"
+          )
+
+          one(
+              "  const elementValue = (element) => {\n"
+              "    if (!element) return '';\n"
+              "    if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) return element.value;\n"
+              "    return element.isContentEditable ? element.innerText || element.textContent || '' : element.textContent || '';\n"
+              "  };\n\n"
+              "  const setFormControlValue = (element, value) => {\n"
+              "    const prototype = element instanceof HTMLTextAreaElement\n"
+              "      ? HTMLTextAreaElement.prototype\n"
+              "      : HTMLInputElement.prototype;",
+              "  const elementTag = (element) => String(element?.tagName || '').toLowerCase();\n"
+              "  const isFormControl = (element) => ['textarea', 'input'].includes(elementTag(element));\n\n"
+              "  const elementValue = (element) => {\n"
+              "    if (!element) return '';\n"
+              "    if (isFormControl(element)) return element.value || '';\n"
+              "    return element.isContentEditable ? element.innerText || element.textContent || '' : element.textContent || '';\n"
+              "  };\n\n"
+              "  const setFormControlValue = (element, value) => {\n"
+              "    const view = element.ownerDocument?.defaultView || window;\n"
+              "    const prototype = elementTag(element) === 'textarea'\n"
+              "      ? view.HTMLTextAreaElement?.prototype\n"
+              "      : view.HTMLInputElement?.prototype;"
+          )
+          one(
+              "const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;",
+              "const setter = prototype ? Object.getOwnPropertyDescriptor(prototype, 'value')?.set : null;"
+          )
+          one(
+              "if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {",
+              "if (isFormControl(element)) {"
+          )
+
+          one(
+              "  const getResponseText = (allowFallback = false) => getResponseCandidate({ allowFallback }).text;",
+              "  const getResponseText = (allowFallback = false) => getResponseCandidate({ allowFallback }).text;\n"
+              "  const getDiagnostics = () => ({\n"
+              "    input: queryAll(platform.input).filter(isVisible).length,\n"
+              "    response: queryAll(platform.response).filter(isVisible).length,\n"
+              "    submit: queryAll(platform.submit).filter(isVisible).length\n"
+              "  });"
+          )
+
+          one(
+              "  const patchHistory = () => {\n"
+              "    for (const method of ['pushState', 'replaceState']) {\n"
+              "      const original = history[method];\n"
+              "      history[method] = function patchedHistory(...args) {\n"
+              "        const result = original.apply(this, args);\n"
+              "        queueMicrotask(handleRouteChange);\n"
+              "        return result;\n"
+              "      };\n"
+              "    }\n"
+              "    addEventListener('popstate', handleRouteChange);\n"
+              "    addEventListener('hashchange', handleRouteChange);\n"
+              "  };",
+              "  const patchHistory = () => {\n"
+              "    for (const method of ['pushState', 'replaceState']) {\n"
+              "      try {\n"
+              "        const original = history[method];\n"
+              "        if (typeof original !== 'function') continue;\n"
+              "        history[method] = function patchedHistory(...args) {\n"
+              "          const result = original.apply(this, args);\n"
+              "          queueMicrotask(handleRouteChange);\n"
+              "          return result;\n"
+              "        };\n"
+              "      } catch (error) {\n"
+              "        debug('history patch unavailable', method, error);\n"
+              "      }\n"
+              "    }\n"
+              "    addEventListener('popstate', handleRouteChange);\n"
+              "    addEventListener('hashchange', handleRouteChange);\n"
+              "  };"
+          )
+
+          one(
+              "width: 310px; color: #f8fafc; background: rgba(15,23,42,.96);",
+              "width: min(310px, calc(100vw - 24px)); max-height: calc(100vh - 24px); color: #f8fafc; background: rgba(15,23,42,.96);"
+          )
+          one("#body { padding: 11px; }", "#body { padding: 11px; max-height: calc(100vh - 86px); overflow: auto; }")
+
+          one(
+              "    setStatus(platform.manualOnly ? 'Ready — manual only' : 'Ready');",
+              "    const diagnostics = getDiagnostics();\n"
+              "    const ready = platform.manualOnly ? 'Ready — manual only' : 'Ready';\n"
+              "    setStatus(`${ready} • input ${diagnostics.input} • response ${diagnostics.response} • send ${diagnostics.submit}`);"
+          )
+          one(
+              "      setStatus('No response found');",
+              "      const diagnostics = getDiagnostics();\n"
+              "      setStatus(`No response found • input ${diagnostics.input} • response ${diagnostics.response}`);"
+          )
+          one(
+              "if (!input) throw new Error('Prompt input not found');",
+              "if (!input) { const diagnostics = getDiagnostics(); throw new Error(`Prompt input not found (input ${diagnostics.input}, response ${diagnostics.response})`); }"
+          )
+
+          one(
+              "  init();\n})();",
+              "  try {\n"
+              "    console.info(`[AutoDriller:${platform.id}] booting v${VERSION}`, location.href);\n"
+              "    init();\n"
+              "  } catch (error) {\n"
+              "    console.error('[AutoDriller] boot failure', error);\n"
+              "    const failure = document.createElement('div');\n"
+              "    failure.id = `${HUD_ID}-failure`;\n"
+              "    failure.textContent = `Auto Driller v${VERSION} failed: ${error instanceof Error ? error.message : String(error)}`;\n"
+              "    failure.style.cssText = 'position:fixed;left:8px;right:8px;bottom:8px;z-index:2147483647;padding:10px;border-radius:8px;background:#7f1d1d;color:white;font:12px system-ui;word-break:break-word';\n"
+              "    document.documentElement.appendChild(failure);\n"
+              "  }\n})();"
+          )
+
+          path.write_text(source)
+          PY
+          node --check scripts/auto-driller-master.user.js
+          node scripts/master_validation_harness.js
+          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
+
+      - name: Commit hotfix
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/auto-driller-master.user.js .github/workflows/ci.yml
+          git commit -m "fix: restore Gear runtime compatibility"
+          git push origin HEAD:${{ github.head_ref }}
+
   validate:
     name: Run legacy and master validation
     runs-on: ubuntu-latest
