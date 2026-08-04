@@ -98,8 +98,14 @@ test('invalid Playwright-only selectors are absent', () => {
 });
 
 test('input drivers cover framework and contenteditable controls', () => {
-  includes('HTMLTextAreaElement.prototype');
-  includes('HTMLInputElement.prototype');
+  assert(
+    source.includes('HTMLTextAreaElement.prototype') || source.includes('view.HTMLTextAreaElement?.prototype'),
+    'Missing textarea native-value prototype driver'
+  );
+  assert(
+    source.includes('HTMLInputElement.prototype') || source.includes('view.HTMLInputElement?.prototype'),
+    'Missing input native-value prototype driver'
+  );
   includes('setContentEditableValue');
   includes("new InputEvent('beforeinput'");
 });
