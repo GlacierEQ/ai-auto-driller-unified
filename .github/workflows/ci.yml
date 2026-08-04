@@ -7,83 +7,9 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply-reviewed-hardening:
-    name: Apply reviewed v5 hardening
-    if: github.event_name == 'pull_request' && github.head_ref == 'feat/auto-driller-v5-master'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout pull-request branch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-
-      - name: Apply and validate hardening patch
-        run: |
-          set -euo pipefail
-          git apply --check --include=scripts/auto-driller-master.user.js .github/v5-hardening.patch
-          git apply --include=scripts/auto-driller-master.user.js .github/v5-hardening.patch
-          python3 <<'PY'
-          from pathlib import Path
-
-          harness = Path('scripts/master_validation_harness.js')
-          text = harness.read_text()
-          marker = "test('script size remains bounded', () => {"
-          extra = r'''test('Grok routing is host-aware', () => {
-            includes("scope: (host, pathname) => host === 'grok.com' || /^\\/i\\/grok/.test(pathname)");
-            includes("candidate.scope(location.hostname, location.pathname)");
-            assert(!source.includes("path: /^\\/i\\/grok|.*/"), 'Grok routing still contains an all-path alternative');
-          });
-
-          test('failed submissions use bounded exponential backoff', () => {
-            includes('consecutiveFailures');
-            includes('backoffUntil');
-            includes('Math.min(30000');
-            includes('Date.now() < state.backoffUntil');
-          });
-
-          test('DOM root discovery is cached', () => {
-            includes('cachedRoots');
-            includes('rootsCachedAt');
-            includes('Date.now() - rootsCachedAt < 5000');
-          });
-
-          test('auto-accept checks surrounding action context', () => {
-            includes('const context = normalize(container.textContent).toLowerCase()');
-            includes('submit order');
-            includes('share publicly');
-          });
-
-          test('route changes preserve prior session history', () => {
-            const routeStart = source.indexOf('const handleRouteChange');
-            const routeEnd = source.indexOf('const patchHistory', routeStart);
-            const routeBlock = source.slice(routeStart, routeEnd);
-            assert(!routeBlock.includes('state.history = []'), 'Route change must not erase session history');
-          });
-
-          '''
-          if "test('Grok routing is host-aware'" not in text:
-              if marker not in text:
-                  raise SystemExit('Harness marker not found')
-              harness.write_text(text.replace(marker, extra + marker, 1))
-          PY
-          rm .github/v5-hardening.patch .github/workflows/apply-v5-hardening.yml
-          node --check scripts/auto-driller-master.user.js
-          node scripts/master_validation_harness.js
-
-      - name: Commit hardened runtime
-        run: |
-          set -euo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add scripts/auto-driller-master.user.js scripts/master_validation_harness.js .github/v5-hardening.patch .github/workflows/apply-v5-hardening.yml
-          git commit -m "fix: harden Grok routing, retries, DOM resolution, and approvals"
-          git push origin HEAD:${{ github.head_ref }}
-
   validate:
     name: Run legacy and master validation
     runs-on: ubuntu-latest
@@ -126,11 +52,12 @@ jobs:
             echo "OK: $f"
           done
 
-      - name: Reject Playwright-only selectors in master runtime
+      - name: Reject unsafe selector patterns
         run: |
           set -euo pipefail
           ! grep -F ':has-text(' scripts/auto-driller-master.user.js
           ! grep -F 'button:has(svg)' scripts/auto-driller-master.user.js
+          ! grep -F 'path: /^\/i\/grok|.*/' scripts/auto-driller-master.user.js
 
       - name: Check script sizes
         run: |
