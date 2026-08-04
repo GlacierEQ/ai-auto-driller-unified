@@ -281,7 +281,7 @@
   let cachedRoots = [document];
   let rootsCachedAt = 0;
   const collectRoots = () => {
-    if (Date.now() - rootsCachedAt < 5000) return cachedRoots;
+    if (Date.now() - rootsCachedAt < 750) return cachedRoots;
     const roots = [document];
     const rootQueue = [document];
     const discoveredRoots = new Set(rootQueue);
@@ -675,8 +675,12 @@
   };
 
   const resetSession = () => {
+    state.operationGeneration += 1;
+    rootsCachedAt = 0;
     state.drillCount = 0;
     state.lastDrillAt = 0;
+    state.consecutiveFailures = 0;
+    state.backoffUntil = 0;
     state.history = [];
     state.audit = [];
     const current = getResponseText();

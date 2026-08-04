@@ -170,7 +170,7 @@ test('Notion is manual only', () => {
 test('Grok routing is host-aware', () => {
   includes("scope: (host, pathname) => host === 'grok.com' || /^\\/i\\/grok/.test(pathname)");
   includes('candidate.scope(location.hostname, location.pathname)');
-  assert(!source.includes("path: /^\\/i\\/grok|.*/"), 'Grok routing still contains an all-path alternative');
+  assert(!/path:\s*\/\^\\\/i\\\/grok\s*\|\s*\.\*\//.test(source), 'Grok routing still contains an all-path alternative');
 });
 
 test('failed submissions use bounded exponential backoff', () => {
@@ -183,7 +183,7 @@ test('failed submissions use bounded exponential backoff', () => {
 test('DOM root discovery is cached and busy selectors are batched', () => {
   includes('cachedRoots');
   includes('rootsCachedAt');
-  includes('Date.now() - rootsCachedAt < 5000');
+  includes('Date.now() - rootsCachedAt < 750');
   includes('const isBusy = () => queryAll(platform.busy).some(isVisible)');
 });
 
@@ -208,8 +208,20 @@ test('emergency stop cancels in-flight operations', () => {
 test('route changes preserve prior session history', () => {
   const routeStart = source.indexOf('const handleRouteChange');
   const routeEnd = source.indexOf('const patchHistory', routeStart);
+  assert(routeStart !== -1 && routeEnd !== -1 && routeEnd > routeStart, 'Unable to locate route change block');
   const routeBlock = source.slice(routeStart, routeEnd);
   assert(!routeBlock.includes('state.history = []'), 'Route change must not erase session history');
+});
+
+
+test('reset clears cancellation and retry state', () => {
+  const resetStart = source.indexOf('const resetSession');
+  const resetEnd = source.indexOf('const createHud', resetStart);
+  assert(resetStart !== -1 && resetEnd !== -1 && resetEnd > resetStart, 'Unable to locate reset block');
+  const resetBlock = source.slice(resetStart, resetEnd);
+  assert(resetBlock.includes('state.operationGeneration += 1'), 'Reset must cancel in-flight work');
+  assert(resetBlock.includes('state.consecutiveFailures = 0'), 'Reset must clear failure count');
+  assert(resetBlock.includes('state.backoffUntil = 0'), 'Reset must clear retry backoff');
 });
 
 test('dead response-text state is absent', () => {
