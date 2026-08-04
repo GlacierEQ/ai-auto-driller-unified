@@ -6,7 +6,48 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: write
+
 jobs:
+  apply-reviewed-hardening:
+    name: Apply reviewed v5 hardening
+    if: github.event_name == 'pull_request' && github.head_ref == 'feat/auto-driller-v5-master'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout pull-request branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Extract and run one-shot patch
+        run: |
+          set -euo pipefail
+          awk '
+            /python3 <<.PY./ { capture=1; next }
+            capture && /^          PY$/ { capture=0; exit }
+            capture { sub(/^          /, ""); print }
+          ' .github/workflows/apply-v5-hardening.yml > /tmp/apply-v5-hardening.py
+          python3 /tmp/apply-v5-hardening.py
+          rm .github/workflows/apply-v5-hardening.yml
+          node --check scripts/auto-driller-master.user.js
+          node scripts/master_validation_harness.js
+
+      - name: Commit hardened runtime
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/auto-driller-master.user.js scripts/master_validation_harness.js .github/workflows/apply-v5-hardening.yml
+          if git diff --cached --quiet; then
+            echo "Hardening already applied"
+            exit 0
+          fi
+          git commit -m "fix: harden Grok routing, retries, DOM resolution, and approvals"
+          git push origin HEAD:${{ github.head_ref }}
+
   validate:
     name: Run legacy and master validation
     runs-on: ubuntu-latest
