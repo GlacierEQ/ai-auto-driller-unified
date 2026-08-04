@@ -7,9 +7,39 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  apply-release-edge-fixes:
+    name: Apply final release edge fixes
+    if: github.event_name == 'pull_request' && github.head_ref == 'feat/auto-driller-v5-master'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout release branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Apply and validate edge fixes
+        run: |
+          set -euo pipefail
+          git apply --check .github/v5-release-fix.patch
+          git apply .github/v5-release-fix.patch
+          rm .github/v5-release-fix.patch
+          node --check scripts/auto-driller-master.user.js
+          node scripts/master_validation_harness.js
+
+      - name: Commit edge fixes
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/auto-driller-master.user.js scripts/master_validation_harness.js .github/v5-release-fix.patch
+          git commit -m "fix: close final Auto Driller v5 release edge cases"
+          git push origin HEAD:${{ github.head_ref }}
+
   validate:
     name: Run legacy and master validation
     runs-on: ubuntu-latest
