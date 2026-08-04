@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Auto-Driller Master
 // @namespace    https://github.com/GlacierEQ
-// @version      5.0.0
+// @version      5.0.1
 // @description  One hardened, cross-platform Auto Driller with verified input, response-stability detection, retries, audit export, and isolated UI.
 // @author       GlacierEQ
 // @match        https://chatgpt.com/*
@@ -10,6 +10,12 @@
 // @match        https://gemini.google.com/*
 // @match        https://www.perplexity.ai/*
 // @match        https://perplexity.ai/*
+// @include      https://chatgpt.com/*
+// @include      https://chat.openai.com/*
+// @include      https://www.perplexity.ai/*
+// @include      https://perplexity.ai/*
+// @noframes
+// @run-in       normal-tabs
 // @match        https://grok.com/*
 // @match        https://x.com/i/grok*
 // @match        https://chat.deepseek.com/*
@@ -36,12 +42,12 @@
 (() => {
   'use strict';
 
-  const VERSION = '5.0.0';
+  const VERSION = '5.0.1';
   const INSTANCE_KEY = 'autoDrillerMasterV5';
   const STORE_KEY = 'auto-driller-master:v5';
   const HUD_ID = 'auto-driller-master-host';
 
-  if (window.top !== window || document.documentElement.dataset[INSTANCE_KEY] === '1') return;
+  if (document.documentElement.dataset[INSTANCE_KEY] === '1') return;
   document.documentElement.dataset[INSTANCE_KEY] = '1';
 
   const DEFAULTS = Object.freeze({
@@ -60,10 +66,10 @@
     {
       id: 'chatgpt', name: 'ChatGPT', color: '#10a37f',
       hosts: [/^(chatgpt\.com|chat\.openai\.com)$/],
-      input: ['#prompt-textarea', 'textarea[placeholder*="Message" i]', '[contenteditable="true"][role="textbox"]'],
-      submit: ['button[data-testid="send-button"]', 'button[aria-label*="Send" i]'],
-      response: ['[data-message-author-role="assistant"]', 'article [data-message-author-role="assistant"]'],
-      strongResponseCount: 2,
+      input: ['#prompt-textarea', '#prompt-textarea[contenteditable="true"]', '[data-testid="composer-input"]', 'textarea[placeholder*="Message" i]', '[contenteditable="true"][role="textbox"]', 'textarea'],
+      submit: ['button[data-testid="send-button"]', 'button[data-testid="composer-send-button"]', 'button[aria-label*="Send" i]'],
+      response: ['[data-message-author-role="assistant"]', 'main [data-message-author-role="assistant"]', 'article[data-testid^="conversation-turn"] [data-message-author-role="assistant"]', 'main article .markdown', 'main article'],
+      strongResponseCount: 3,
       busy: ['button[data-testid="stop-button"]', 'button[aria-label*="Stop" i]', '[class*="result-streaming"]']
     },
     {
@@ -87,10 +93,10 @@
     {
       id: 'perplexity', name: 'Perplexity', color: '#20808d',
       hosts: [/^(www\.)?perplexity\.ai$/],
-      input: ['textarea[placeholder*="Ask" i]', 'textarea[role="textbox"]', 'textarea', '[contenteditable="true"][role="textbox"]'],
-      submit: ['button[type="submit"]', 'button[aria-label*="Submit" i]', 'button[aria-label*="Send" i]'],
-      response: ['[data-testid*="answer" i]', '[class*="answer"] .prose', 'article .prose', '.prose'],
-      strongResponseCount: 2,
+      input: ['textarea[placeholder*="Ask anything" i]', 'textarea[placeholder*="Ask" i]', 'textarea[role="textbox"]', '[contenteditable="true"][data-lexical-editor="true"]', '[contenteditable="true"][role="textbox"]', 'textarea'],
+      submit: ['button[type="submit"]', 'button[data-testid*="submit" i]', 'button[aria-label*="Submit" i]', 'button[aria-label*="Send" i]', 'button[aria-label*="Ask" i]'],
+      response: ['[data-testid*="answer" i]', 'main [data-testid*="answer" i]', 'main article [class*="prose"]', 'main article [class*="markdown"]', 'main article', '.prose'],
+      strongResponseCount: 4,
       busy: ['[aria-busy="true"]', 'button[aria-label*="Stop" i]', '[class*="generating"]']
     },
     {
@@ -165,7 +171,26 @@
   });
   if (!platform) return;
 
-  const storedConfig = GM_getValue(`${STORE_KEY}:config`, {});
+  const gmGetValue = typeof GM_getValue === 'function'
+    ? GM_getValue
+    : (key, fallback) => {
+        try {
+          const value = localStorage.getItem(key);
+          return value === null ? fallback : JSON.parse(value);
+        } catch {
+          return fallback;
+        }
+      };
+  const gmSetValue = typeof GM_setValue === 'function'
+    ? GM_setValue
+    : (key, value) => {
+        try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+      };
+  const gmRegisterMenuCommand = typeof GM_registerMenuCommand === 'function'
+    ? GM_registerMenuCommand
+    : () => '';
+
+  const storedConfig = gmGetValue(`${STORE_KEY}:config`, {});
   const config = { ...DEFAULTS, ...(storedConfig && typeof storedConfig === 'object' ? storedConfig : {}) };
   const clampNumber = (value, minimum, maximum, fallback) => {
     const numeric = Number(value);
@@ -255,7 +280,7 @@
   const debug = (...args) => {
     if (config.debug) console.debug(`[AutoDriller:${platform.id}]`, ...args);
   };
-  const persistConfig = () => GM_setValue(`${STORE_KEY}:config`, { ...config, autoDrill: platform.manualOnly ? false : config.autoDrill });
+  const persistConfig = () => gmSetValue(`${STORE_KEY}:config`, { ...config, autoDrill: platform.manualOnly ? false : config.autoDrill });
 
   const audit = (type, details = {}) => {
     const event = { at: new Date().toISOString(), type, platform: platform.id, url: location.href, ...details };
@@ -266,7 +291,7 @@
   };
 
   const isVisible = (element) => {
-    if (!(element instanceof Element) || !element.isConnected) return false;
+    if (!element || element.nodeType !== 1 || !element.isConnected) return false;
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
     return style.display !== 'none' &&
@@ -291,7 +316,7 @@
         ? [document.documentElement, ...document.querySelectorAll('*')]
         : [...root.querySelectorAll('*')];
       for (const element of elements) {
-        if (!(element instanceof Element) || !element.shadowRoot || discoveredRoots.has(element.shadowRoot)) continue;
+        if (!element || element.nodeType !== 1 || !element.shadowRoot || discoveredRoots.has(element.shadowRoot)) continue;
         discoveredRoots.add(element.shadowRoot);
         roots.push(element.shadowRoot);
         rootQueue.push(element.shadowRoot);
@@ -362,17 +387,21 @@
     return matches.length ? matches[matches.length - 1] : null;
   };
 
+  const elementTag = (element) => String(element?.tagName || '').toLowerCase();
+  const isFormControl = (element) => ['textarea', 'input'].includes(elementTag(element));
+
   const elementValue = (element) => {
     if (!element) return '';
-    if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) return element.value;
+    if (isFormControl(element)) return element.value || '';
     return element.isContentEditable ? element.innerText || element.textContent || '' : element.textContent || '';
   };
 
   const setFormControlValue = (element, value) => {
-    const prototype = element instanceof HTMLTextAreaElement
-      ? HTMLTextAreaElement.prototype
-      : HTMLInputElement.prototype;
-    const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+    const view = element.ownerDocument?.defaultView || window;
+    const prototype = elementTag(element) === 'textarea'
+      ? view.HTMLTextAreaElement?.prototype
+      : view.HTMLInputElement?.prototype;
+    const setter = prototype ? Object.getOwnPropertyDescriptor(prototype, 'value')?.set : null;
     if (setter) setter.call(element, value);
     else element.value = value;
     element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
@@ -398,7 +427,7 @@
 
   const setInputValue = (element, value) => {
     element.focus();
-    if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+    if (isFormControl(element)) {
       setFormControlValue(element, value);
     } else if (element.isContentEditable) {
       setContentEditableValue(element, value);
@@ -445,6 +474,11 @@
   };
 
   const getResponseText = (allowFallback = false) => getResponseCandidate({ allowFallback }).text;
+  const getDiagnostics = () => ({
+    input: queryAll(platform.input).filter(isVisible).length,
+    response: queryAll(platform.response).filter(isVisible).length,
+    submit: queryAll(platform.submit).filter(isVisible).length
+  });
 
   const hashText = (text) => {
     let hash = 2166136261;
@@ -557,7 +591,8 @@
 
     const responseText = getResponseText(manual);
     if (!responseText) {
-      setStatus('No response found');
+      const diagnostics = getDiagnostics();
+      setStatus(`No response found • input ${diagnostics.input} • response ${diagnostics.response}`);
       audit('drill.blocked', { reason: 'no-response' });
       return false;
     }
@@ -574,7 +609,7 @@
     try {
       const input = await waitUntil(() => getInput(), 4000) ? getInput() : null;
       assertOperationActive(operationGeneration);
-      if (!input) throw new Error('Prompt input not found');
+      if (!input) { const diagnostics = getDiagnostics(); throw new Error(`Prompt input not found (input ${diagnostics.input}, response ${diagnostics.response})`); }
       if (normalize(elementValue(input))) throw new Error('Prompt input is not empty');
 
       assertOperationActive(operationGeneration);
@@ -711,7 +746,7 @@
         :host { all: initial; }
         * { box-sizing: border-box; }
         #panel {
-          width: 310px; color: #f8fafc; background: rgba(15,23,42,.96);
+          width: min(310px, calc(100vw - 24px)); max-height: calc(100vh - 24px); color: #f8fafc; background: rgba(15,23,42,.96);
           border: 1px solid rgba(148,163,184,.28); border-radius: 12px;
           box-shadow: 0 18px 50px rgba(0,0,0,.38); overflow: hidden;
           font: 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -723,7 +758,7 @@
         #title { font-weight: 750; letter-spacing: .1px; }
         #version { opacity: .78; font-size: 11px; margin-left: 6px; }
         #minimize { border: 0; border-radius: 6px; background: rgba(255,255,255,.18); color: white; width: 27px; height: 27px; cursor: pointer; }
-        #body { padding: 11px; }
+        #body { padding: 11px; max-height: calc(100vh - 86px); overflow: auto; }
         #body.hidden { display: none; }
         .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 7px 0; }
         .row label { color: #cbd5e1; }
@@ -869,12 +904,17 @@
 
   const patchHistory = () => {
     for (const method of ['pushState', 'replaceState']) {
-      const original = history[method];
-      history[method] = function patchedHistory(...args) {
-        const result = original.apply(this, args);
-        queueMicrotask(handleRouteChange);
-        return result;
-      };
+      try {
+        const original = history[method];
+        if (typeof original !== 'function') continue;
+        history[method] = function patchedHistory(...args) {
+          const result = original.apply(this, args);
+          queueMicrotask(handleRouteChange);
+          return result;
+        };
+      } catch (error) {
+        debug('history patch unavailable', method, error);
+      }
     }
     addEventListener('popstate', handleRouteChange);
     addEventListener('hashchange', handleRouteChange);
@@ -886,7 +926,9 @@
     state.lastHandledHash = hash;
     state.candidateHash = hash;
     state.candidateSince = Date.now();
-    setStatus(platform.manualOnly ? 'Ready — manual only' : 'Ready');
+    const diagnostics = getDiagnostics();
+    const ready = platform.manualOnly ? 'Ready — manual only' : 'Ready';
+    setStatus(`${ready} • input ${diagnostics.input} • response ${diagnostics.response} • send ${diagnostics.submit}`);
     audit('runtime.ready', { initialResponseHash: hash || null });
   };
 
@@ -907,19 +949,19 @@
     for (const eventName of ['pointerdown', 'keydown', 'input', 'paste']) {
       document.addEventListener(eventName, registerTrustedActivity, true);
     }
-    GM_registerMenuCommand('Auto Driller: Toggle panel', () => {
+    gmRegisterMenuCommand('Auto Driller: Toggle panel', () => {
       if (!state.hudHost) return;
       state.hudHost.style.display = state.hudHost.style.display === 'none' ? 'block' : 'none';
     });
-    GM_registerMenuCommand('Auto Driller: Drill now', () => void submitDrill({ manual: true }));
-    GM_registerMenuCommand('Auto Driller: Toggle auto drill', () => {
+    gmRegisterMenuCommand('Auto Driller: Drill now', () => void submitDrill({ manual: true }));
+    gmRegisterMenuCommand('Auto Driller: Toggle auto drill', () => {
       if (platform.manualOnly) return;
       config.autoDrill = !config.autoDrill;
       persistConfig();
       if (state.shadow) state.shadow.getElementById('autoDrill').checked = config.autoDrill;
       audit('config.changed', { key: 'autoDrill', value: config.autoDrill });
     });
-    GM_registerMenuCommand('Auto Driller: Emergency stop', () => {
+    gmRegisterMenuCommand('Auto Driller: Emergency stop', () => {
       state.operationGeneration += 1;
       config.enabled = false;
       config.autoDrill = false;
@@ -943,5 +985,15 @@
     state.ticker = setInterval(tick, 700);
   };
 
-  init();
+  try {
+    console.info(`[AutoDriller:${platform.id}] booting v${VERSION}`, location.href);
+    init();
+  } catch (error) {
+    console.error('[AutoDriller] boot failure', error);
+    const failure = document.createElement('div');
+    failure.id = `${HUD_ID}-failure`;
+    failure.textContent = `Auto Driller v${VERSION} failed: ${error instanceof Error ? error.message : String(error)}`;
+    failure.style.cssText = 'position:fixed;left:8px;right:8px;bottom:8px;z-index:2147483647;padding:10px;border-radius:8px;background:#7f1d1d;color:white;font:12px system-ui;word-break:break-word';
+    document.documentElement.appendChild(failure);
+  }
 })();
