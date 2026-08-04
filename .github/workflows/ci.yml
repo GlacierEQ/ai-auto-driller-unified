@@ -25,14 +25,27 @@ jobs:
       - name: Apply exact reviewed payload
         run: |
           set -euo pipefail
-          RUNTIME_PATCH_GZ_B64="$(sed -n 's/^          RUNTIME_PATCH_GZ_B64: //p' .github/workflows/apply-v5-final.yml)"
-          HARNESS_GZ_B64="$(sed -n 's/^          HARNESS_GZ_B64: //p' .github/workflows/apply-v5-final.yml)"
-          test -n "$RUNTIME_PATCH_GZ_B64"
-          test -n "$HARNESS_GZ_B64"
-          printf '%s' "$RUNTIME_PATCH_GZ_B64" | base64 --decode --ignore-garbage | gzip -d > /tmp/final-runtime.patch
+          python3 <<'PY'
+          import base64
+          import gzip
+          import re
+          from pathlib import Path
+
+          source = Path('.github/workflows/apply-v5-final.yml').read_text()
+
+          def decode(name):
+              match = re.search(rf'^\s*{name}:\s*(\S+)\s*$', source, re.MULTILINE)
+              if not match:
+                  raise SystemExit(f'Missing payload: {name}')
+              encoded = re.sub(r'[^A-Za-z0-9+/=]', '', match.group(1))
+              encoded += '=' * (-len(encoded) % 4)
+              return gzip.decompress(base64.b64decode(encoded, validate=False))
+
+          Path('/tmp/final-runtime.patch').write_bytes(decode('RUNTIME_PATCH_GZ_B64'))
+          Path('scripts/master_validation_harness.js').write_bytes(decode('HARNESS_GZ_B64'))
+          PY
           git apply --check /tmp/final-runtime.patch
           git apply /tmp/final-runtime.patch
-          printf '%s' "$HARNESS_GZ_B64" | base64 --decode --ignore-garbage | gzip -d > scripts/master_validation_harness.js
           rm .github/workflows/apply-v5-final.yml
           node --check scripts/auto-driller-master.user.js
           node scripts/master_validation_harness.js
