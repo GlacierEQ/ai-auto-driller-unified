@@ -7,58 +7,9 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply-final-safety-pass:
-    name: Apply final v5 safety pass
-    if: github.event_name == 'pull_request' && github.head_ref == 'feat/auto-driller-v5-master'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout release branch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-
-      - name: Apply exact reviewed payload
-        run: |
-          set -euo pipefail
-          python3 <<'PY'
-          import base64
-          import gzip
-          import re
-          from pathlib import Path
-
-          source = Path('.github/workflows/apply-v5-final.yml').read_text()
-
-          def decode(name):
-              match = re.search(rf'^\s*{name}:\s*(\S+)\s*$', source, re.MULTILINE)
-              if not match:
-                  raise SystemExit(f'Missing payload: {name}')
-              encoded = re.sub(r'[^A-Za-z0-9+/=]', '', match.group(1))
-              encoded += '=' * (-len(encoded) % 4)
-              return gzip.decompress(base64.b64decode(encoded, validate=False))
-
-          Path('/tmp/final-runtime.patch').write_bytes(decode('RUNTIME_PATCH_GZ_B64'))
-          Path('scripts/master_validation_harness.js').write_bytes(decode('HARNESS_GZ_B64'))
-          PY
-          git apply --check /tmp/final-runtime.patch
-          git apply /tmp/final-runtime.patch
-          rm .github/workflows/apply-v5-final.yml
-          node --check scripts/auto-driller-master.user.js
-          node scripts/master_validation_harness.js
-
-      - name: Commit final safety pass
-        run: |
-          set -euo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add scripts/auto-driller-master.user.js scripts/master_validation_harness.js .github/workflows/apply-v5-final.yml
-          git commit -m "fix: complete Auto Driller v5 release safety pass"
-          git push origin HEAD:${{ github.head_ref }}
-
   validate:
     name: Run legacy and master validation
     runs-on: ubuntu-latest
@@ -101,12 +52,17 @@ jobs:
             echo "OK: $f"
           done
 
-      - name: Reject unsafe selector patterns
+      - name: Enforce safety contracts
         run: |
           set -euo pipefail
-          ! grep -F ':has-text(' scripts/auto-driller-master.user.js
-          ! grep -F 'button:has(svg)' scripts/auto-driller-master.user.js
-          ! grep -F 'path: /^\/i\/grok|.*/' scripts/auto-driller-master.user.js
+          SCRIPT=scripts/auto-driller-master.user.js
+          ! grep -F ':has-text(' "$SCRIPT"
+          ! grep -F 'button:has(svg)' "$SCRIPT"
+          ! grep -F 'path: /^\/i\/grok|.*/' "$SCRIPT"
+          grep -F 'if (!config.enabled || !config.autoAccept || !approval) return' "$SCRIPT"
+          grep -F 'assertOperationActive(operationGeneration)' "$SCRIPT"
+          grep -F 'clearTimeout(state.baselineTimer)' "$SCRIPT"
+          grep -F 'if (!candidate.strong || !candidate.text) return' "$SCRIPT"
 
       - name: Check script sizes
         run: |
