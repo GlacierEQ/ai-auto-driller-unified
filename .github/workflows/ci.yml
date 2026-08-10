@@ -15,8 +15,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout exact source
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact source identity
+        shell: bash
+        run: |
+          expected="${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "$expected"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags origin "${{ github.event.pull_request.base.sha }}"
+            git merge-base --is-ancestor "${{ github.event.pull_request.base.sha }}" HEAD
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -25,13 +39,13 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Run complete validation suite
         run: npm test
 
-      - name: Lint runtime scripts
-        run: npx eslint scripts/ --ext .js --ignore-pattern '*validation_harness.js' || true
+      - name: Audit preserved lint debt
+        run: npx eslint scripts/ --ext .js --ignore-pattern '*validation_harness.js'
         continue-on-error: true
 
   script-health:
@@ -39,16 +53,36 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout exact source
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
-      - name: Verify userscript metadata
+      - name: Verify exact source identity
+        shell: bash
+        run: |
+          expected="${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "$expected"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags origin "${{ github.event.pull_request.base.sha }}"
+            git merge-base --is-ancestor "${{ github.event.pull_request.base.sha }}" HEAD
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Verify userscript metadata and syntax
         run: |
           set -euo pipefail
           for f in scripts/*.user.js; do
             grep -q "@name" "$f" || { echo "MISSING @name: $f"; exit 1; }
             grep -q "@version" "$f" || { echo "MISSING @version: $f"; exit 1; }
             grep -q "@match" "$f" || { echo "MISSING @match: $f"; exit 1; }
+            node --check "$f"
             echo "OK: $f"
           done
 
@@ -65,6 +99,8 @@ jobs:
           grep -F 'if (!candidate.strong || !candidate.text) return' "$SCRIPT"
           grep -F 'Date.now() - rootsCachedAt < 750' "$SCRIPT"
           grep -F 'state.backoffUntil = 0' "$SCRIPT"
+          grep -F '// @version      5.0.1' "$SCRIPT"
+          grep -F "const VERSION = '5.0.1'" "$SCRIPT"
 
       - name: Check script sizes
         run: |
