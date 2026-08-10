@@ -11,7 +11,7 @@ Repository-native proof validates the checked-in source without claiming a live 
 - the master userscript has valid metadata and recognized platform match/include rules;
 - the master validation harness exercises input targeting, response-stability logic, retries, approval gating, operation-generation cancellation, cache/backoff behavior, and export-oriented state;
 - the legacy validation harness exercises preserved platform-specific userscripts;
-- every `*.user.js` parses as JavaScript and carries userscript metadata;
+- every `scripts/*.user.js` parses as JavaScript and carries userscript metadata inside a valid `==UserScript==` metadata block;
 - public CI is bound to the exact pull-request head or push SHA.
 
 ## Canonical runtime
