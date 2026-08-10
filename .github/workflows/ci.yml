@@ -79,9 +79,12 @@ jobs:
         run: |
           set -euo pipefail
           for f in scripts/*.user.js; do
-            grep -q "@name" "$f" || { echo "MISSING @name: $f"; exit 1; }
-            grep -q "@version" "$f" || { echo "MISSING @version: $f"; exit 1; }
-            grep -q "@match" "$f" || { echo "MISSING @match: $f"; exit 1; }
+            grep -q '^// ==UserScript==$' "$f" || { echo "MISSING metadata start: $f"; exit 1; }
+            grep -q '^// ==/UserScript==$' "$f" || { echo "MISSING metadata end: $f"; exit 1; }
+            metadata="$(sed -n '/^\/\/ ==UserScript==$/,/^\/\/ ==\/UserScript==$/p' "$f")"
+            grep -q '@name' <<<"$metadata" || { echo "MISSING @name in metadata: $f"; exit 1; }
+            grep -q '@version' <<<"$metadata" || { echo "MISSING @version in metadata: $f"; exit 1; }
+            grep -q '@match' <<<"$metadata" || { echo "MISSING @match in metadata: $f"; exit 1; }
             node --check "$f"
             echo "OK: $f"
           done
