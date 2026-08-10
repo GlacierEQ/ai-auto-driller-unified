@@ -68,28 +68,36 @@ const DRILL_PATTERNS = {
   integration: ["How does {topic} integrate?","Dependencies of {topic}?"]
 };
 const WEIGHTS = [1,3,4,2,2,3,3,2];
+const categories = Object.keys(DRILL_PATTERNS);
+const totalWeight = WEIGHTS.reduce((a,b)=>a+b,0);
+function selectCategoryByWeightedPosition(position) {
+  assert(position >= 0 && position < totalWeight, `Position out of range: ${position}`);
+  let remaining = position;
+  for (let i = 0; i < WEIGHTS.length; i++) {
+    if (remaining < WEIGHTS[i]) return categories[i];
+    remaining -= WEIGHTS[i];
+  }
+  throw new Error(`No category for weighted position ${position}`);
+}
 
 test('Question generation — returns non-empty string', () => {
-  const cats = Object.keys(DRILL_PATTERNS);
-  const totalW = WEIGHTS.reduce((a,b)=>a+b,0);
-  let r = Math.random() * totalW; let idx = 0;
-  for(let i=0;i<WEIGHTS.length;i++){r-=WEIGHTS[i];if(r<=0){idx=i;break;}}
-  const pattern = DRILL_PATTERNS[cats[idx]][0];
+  const category = selectCategoryByWeightedPosition(0);
+  const pattern = DRILL_PATTERNS[category][0];
   const q = pattern.replace('{topic}', 'quantum computing');
   assert(q.length > 0, 'Empty question');
   assert(!q.includes('{topic}'), 'Unreplaced placeholder');
 });
 
-test('Question generation — covers all 8 categories over 80 iterations', () => {
+test('Question generation — every weighted category has reachable positions', () => {
+  let offset = 0;
   const seen = new Set();
-  for (let i = 0; i < 80; i++) {
-    const cats = Object.keys(DRILL_PATTERNS);
-    const totalW = WEIGHTS.reduce((a,b)=>a+b,0);
-    let r = Math.random() * totalW; let idx = 0;
-    for(let j=0;j<WEIGHTS.length;j++){r-=WEIGHTS[j];if(r<=0){idx=j;break;}}
-    seen.add(cats[idx]);
+  for (let i = 0; i < WEIGHTS.length; i++) {
+    const midpoint = offset + (WEIGHTS[i] - 1) / 2;
+    seen.add(selectCategoryByWeightedPosition(midpoint));
+    offset += WEIGHTS[i];
   }
-  assertEqual(seen.size, 8, `Missing categories: ${[...Object.keys(DRILL_PATTERNS).filter(c=>!seen.has(c))]}`);
+  assertEqual(seen.size, categories.length, `Missing categories: ${categories.filter(c=>!seen.has(c))}`);
+  assertEqual(offset, totalWeight, 'Weight intervals do not cover total weight');
 });
 
 // ─── AUTO-ACCEPT ──────────────────────────────────────────────────────────────

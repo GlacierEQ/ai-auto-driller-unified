@@ -1,7 +1,7 @@
 {
   "name": "ai-auto-driller-unified",
   "version": "5.0.0",
-  "description": "Hardened cross-platform Auto Driller userscript with verified browser actions, platform adapters, audit export, and legacy platform scripts.",
+  "description": "Cross-platform userscript automation toolkit with repository-local validation and explicit browser-runtime boundaries.",
   "author": "GlacierEQ",
   "license": "MIT",
   "homepage": "https://github.com/GlacierEQ/ai-auto-driller-unified",
