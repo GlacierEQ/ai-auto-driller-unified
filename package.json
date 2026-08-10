@@ -1,6 +1,6 @@
 {
   "name": "ai-auto-driller-unified",
-  "version": "5.0.1",
+  "version": "5.0.0",
   "description": "Cross-platform userscript automation toolkit with repository-local validation and explicit browser-runtime boundaries.",
   "author": "GlacierEQ",
   "license": "MIT",
