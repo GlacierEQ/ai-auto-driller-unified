@@ -2,7 +2,7 @@
 
 **Cross-platform userscript automation toolkit with deterministic repository validation and explicit browser-runtime boundaries.**
 
-The canonical runtime is [`scripts/auto-driller-master.user.js`](scripts/auto-driller-master.user.js), currently userscript version **5.0.1**. The repository also preserves platform-specific scripts, configuration documentation, and validation harnesses.
+The canonical runtime is [`scripts/auto-driller-master.user.js`](scripts/auto-driller-master.user.js), currently userscript version **5.1.0**. The repository also preserves platform-specific scripts, configuration documentation, and validation harnesses.
 
 ## What is verified here
 
@@ -32,6 +32,21 @@ The runtime defaults are deliberately conservative:
 - approval/action checks before automated acceptance
 - operation-generation cancellation so stale work can be invalidated
 - response-stability checks before follow-up activity
+
+## Retrieval-first Context Lens
+
+Auto Driller 5.1 makes continuity part of question generation rather than a separate ritual.
+
+For each drill it:
+
+1. prioritizes the latest visible user message as the search seed;
+2. extracts a small set of high-information terms;
+3. folds in nearby page context and persisted recent drill context;
+4. queries an optional local corpus bridge at `http://127.0.0.1:8765/search`;
+5. if matches are returned, injects only compact recovered snippets into the next question;
+6. if no bridge is available, asks the AI to search available prior conversation/export history for the extracted terms before answering.
+
+Corpus retrieval is an accelerator, not a gate. A missing or timed-out bridge falls back to local context and does not disable drilling.
 
 ## Validation
 
@@ -67,4 +82,4 @@ A green repository workflow establishes **source-level userscript behavior and v
 
 ## Version boundary
 
-The canonical userscript declares `@version 5.0.1`. `package.json` is tooling metadata for the repository validation wrapper and remains `5.0.0`; userscript release identity is taken from the canonical userscript header/runtime constant rather than inferred from npm package metadata.
+The canonical userscript declares `@version 5.1.0`. `package.json` is tooling metadata for the repository validation wrapper and remains `5.0.0`; userscript release identity is taken from the canonical userscript header/runtime constant rather than inferred from npm package metadata.

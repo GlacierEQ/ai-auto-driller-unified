@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AI Auto-Driller Master
 // @namespace    https://github.com/GlacierEQ
-// @version      5.0.1
-// @description  One hardened, cross-platform Auto Driller with verified input, response-stability detection, retries, audit export, and isolated UI.
+// @version      5.1.0
+// @description  Retrieval-first cross-platform Auto Driller with context-aware questions, corpus continuity, verified input, retries, audit export, and isolated UI.
 // @author       GlacierEQ
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -34,6 +34,9 @@
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
 // @grant        GM_addStyle
+// @grant        GM_xmlhttpRequest
+// @connect      127.0.0.1
+// @connect      localhost
 // @run-at       document-idle
 // @downloadURL  https://raw.githubusercontent.com/GlacierEQ/ai-auto-driller-unified/main/scripts/auto-driller-master.user.js
 // @updateURL    https://raw.githubusercontent.com/GlacierEQ/ai-auto-driller-unified/main/scripts/auto-driller-master.user.js
@@ -42,8 +45,8 @@
 (() => {
   'use strict';
 
-  const VERSION = '5.0.1';
-  const INSTANCE_KEY = 'autoDrillerMasterV5';
+  const VERSION = '5.1.0';
+  const INSTANCE_KEY = 'autoDrillerMasterV51';
   const STORE_KEY = 'auto-driller-master:v5';
   const HUD_ID = 'auto-driller-master-host';
 
@@ -58,6 +61,13 @@
     drillIntervalMs: 7000,
     userQuietMs: 10000,
     responseStableMs: 1400,
+    contextAwareDrill: true,
+    corpusRetrieval: true,
+    corpusBridgeUrl: 'http://127.0.0.1:8765/search',
+    corpusTimeoutMs: 1800,
+    corpusTopK: 6,
+    contextWindowChars: 8000,
+    contextHistoryLimit: 12,
     debug: false,
     minimized: false
   });
@@ -199,6 +209,13 @@
   config.enabled = Boolean(config.enabled);
   config.autoDrill = Boolean(config.autoDrill);
   config.autoAccept = Boolean(config.autoAccept);
+  config.contextAwareDrill = Boolean(config.contextAwareDrill);
+  config.corpusRetrieval = Boolean(config.corpusRetrieval);
+  config.corpusBridgeUrl = String(config.corpusBridgeUrl || DEFAULTS.corpusBridgeUrl).trim();
+  config.corpusTimeoutMs = clampNumber(config.corpusTimeoutMs, 250, 10000, DEFAULTS.corpusTimeoutMs);
+  config.corpusTopK = Math.round(clampNumber(config.corpusTopK, 1, 20, DEFAULTS.corpusTopK));
+  config.contextWindowChars = Math.round(clampNumber(config.contextWindowChars, 1000, 30000, DEFAULTS.contextWindowChars));
+  config.contextHistoryLimit = Math.round(clampNumber(config.contextHistoryLimit, 1, 50, DEFAULTS.contextHistoryLimit));
   config.debug = Boolean(config.debug);
   config.minimized = Boolean(config.minimized);
   config.maxDrillDepth = Math.round(clampNumber(config.maxDrillDepth, 1, 50, DEFAULTS.maxDrillDepth));
@@ -207,6 +224,8 @@
   config.responseStableMs = clampNumber(config.responseStableMs, 500, 10000, DEFAULTS.responseStableMs);
   if (platform.manualOnly) config.autoDrill = false;
   if (!platform.approval) config.autoAccept = false;
+
+  const storedContextMemory = gmGetValue(`${STORE_KEY}:context-memory`, []);
 
   const state = {
     startedAt: Date.now(),
@@ -223,6 +242,8 @@
     baselineTimer: 0,
     currentUrl: location.href,
     history: [],
+    contextMemory: Array.isArray(storedContextMemory) ? storedContextMemory.slice(-50) : [],
+    lastContextPacket: null,
     audit: [],
     clickedApprovals: new WeakSet(),
     hudHost: null,
@@ -231,6 +252,14 @@
   };
 
   const DRILL_PATTERNS = Object.freeze({
+    continuity: [
+      'Search the available prior conversation/export history for {keywords}. Recover the strongest relevant thread before answering. Given that prior context, what unresolved connection most changes how {topic} should be handled now?',
+      'Search prior chat/export history for {keywords}. What earlier decision, discovery, contradiction, or unfinished objective should be carried forward before taking the next step on {topic}?'
+    ],
+    connection: [
+      'Using the recovered history, connect {topic} to {related}. What important relationship or consequence has not been fully developed yet?',
+      'Cross-reference {keywords} against earlier conversations. Which prior event, person, argument, or technical decision most strongly changes the next question about {topic}?'
+    ],
     clarification: [
       'Clarify the most important ambiguity in {topic}, then provide a concrete example.',
       'Break {topic} into its essential components and explain how they relate.'
@@ -265,6 +294,8 @@
     ]
   });
   const PATTERN_WEIGHTS = Object.freeze({
+    continuity: 7,
+    connection: 5,
     clarification: 1,
     depth: 2,
     practical: 4,
@@ -504,18 +535,200 @@
     return false;
   };
 
-  const extractTopic = (text) => {
-    const stopWords = new Set([
-      'the','and','that','this','with','from','have','will','would','could','should','into','about','there',
-      'their','what','when','where','which','while','your','youre','they','them','then','than','also','only',
-      'using','used','does','doing','done','been','were','was','are','for','not','but','all','any','can'
-    ]);
-    const words = normalize(text)
+  const STOP_WORDS = new Set([
+    'the','and','that','this','with','from','have','will','would','could','should','into','about','there',
+    'their','what','when','where','which','while','your','youre','they','them','then','than','also','only',
+    'using','used','does','doing','done','been','were','was','are','for','not','but','all','any','can',
+    'just','really','very','some','thing','things','want','need','like','more','most','much','make','made'
+  ]);
+
+  const USER_MESSAGE_SELECTORS = Object.freeze([
+    '[data-message-author-role="user"]',
+    '[data-testid*="user-message" i]',
+    '[data-testid*="human" i]',
+    '[class*="user-message" i]',
+    '[class*="message"][class*="user" i]'
+  ]);
+
+  const extractKeywords = (text, limit = 8) => {
+    const raw = normalize(text);
+    if (!raw) return [];
+
+    const properPhrases = [...raw.matchAll(/\b[A-Z][A-Za-z0-9_.-]+(?:\s+[A-Z][A-Za-z0-9_.-]+){1,3}\b/g)]
+      .map((match) => normalize(match[0]))
+      .filter((value) => value.length >= 5);
+
+    const counts = new Map();
+    const tokens = raw
       .toLowerCase()
-      .replace(/[^a-z0-9\u4e00-\u9fff\s-]/g, ' ')
+      .replace(/[^a-z0-9\u4e00-\u9fff_.:/#-]/g, ' ')
       .split(/\s+/)
-      .filter((word) => word.length > 3 && !stopWords.has(word));
-    return words.slice(0, 5).join(' ') || 'the current subject';
+      .filter((word) => word.length > 3 && !STOP_WORDS.has(word));
+
+    for (const token of tokens) counts.set(token, (counts.get(token) || 0) + 1);
+
+    const rankedTokens = [...counts.entries()]
+      .sort((left, right) => {
+        const leftScore = left[1] * 10 + Math.min(left[0].length, 18);
+        const rightScore = right[1] * 10 + Math.min(right[0].length, 18);
+        return rightScore - leftScore || left[0].localeCompare(right[0]);
+      })
+      .map(([token]) => token);
+
+    const output = [];
+    const seen = new Set();
+    for (const candidate of [...properPhrases, ...rankedTokens]) {
+      const key = candidate.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      output.push(candidate);
+      if (output.length >= limit) break;
+    }
+    return output;
+  };
+
+  const extractTopic = (text) => extractKeywords(text, 5).join(' ') || 'the current subject';
+
+  const getLatestUserText = () => {
+    const matches = queryAll(USER_MESSAGE_SELECTORS)
+      .filter(isVisible)
+      .map((element) => normalize(element.textContent || element.innerText || ''))
+      .filter(Boolean);
+    return matches.length ? matches[matches.length - 1] : '';
+  };
+
+  const collectPageContext = () => {
+    const selectors = [...USER_MESSAGE_SELECTORS, ...platform.response, 'main article', '.markdown', '.prose'];
+    const seen = new Set();
+    const pieces = [];
+    for (const element of queryAll(selectors).filter(isVisible)) {
+      const text = normalize(element.textContent || element.innerText || '');
+      if (!text || text.length < 3) continue;
+      const hash = hashText(text);
+      if (seen.has(hash)) continue;
+      seen.add(hash);
+      pieces.push(text);
+    }
+    return pieces.join('\n').slice(-config.contextWindowChars);
+  };
+
+  const persistContextMemory = (entry) => {
+    state.contextMemory.push(entry);
+    if (state.contextMemory.length > 50) {
+      state.contextMemory.splice(0, state.contextMemory.length - 50);
+    }
+    gmSetValue(`${STORE_KEY}:context-memory`, state.contextMemory);
+  };
+
+  const normalizeCorpusMatches = (payload) => {
+    const source = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.matches)
+        ? payload.matches
+        : Array.isArray(payload?.results)
+          ? payload.results
+          : Array.isArray(payload?.hits)
+            ? payload.hits
+            : [];
+
+    return source
+      .map((item) => {
+        if (typeof item === 'string') return { text: normalize(item), title: '', score: null };
+        if (!item || typeof item !== 'object') return null;
+        const text = normalize(
+          item.text || item.snippet || item.content || item.excerpt ||
+          item.entry_text || item.span_text || item.message || ''
+        );
+        if (!text) return null;
+        return {
+          text,
+          title: normalize(item.title || item.source_title || item.conversation_title || ''),
+          score: Number.isFinite(Number(item.score)) ? Number(item.score) : null
+        };
+      })
+      .filter(Boolean)
+      .slice(0, config.corpusTopK);
+  };
+
+  const requestCorpusContext = ({ query, keywords, latestUserText }) => {
+    if (!config.corpusRetrieval || !config.corpusBridgeUrl || typeof GM_xmlhttpRequest !== 'function') {
+      return Promise.resolve({ status: 'unavailable', matches: [] });
+    }
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+
+      try {
+        GM_xmlhttpRequest({
+          method: 'POST',
+          url: config.corpusBridgeUrl,
+          headers: { 'Content-Type': 'application/json' },
+          data: JSON.stringify({
+            query,
+            keywords,
+            latestUserText,
+            platform: platform.id,
+            pageUrl: location.href,
+            limit: config.corpusTopK
+          }),
+          timeout: config.corpusTimeoutMs,
+          onload: (response) => {
+            if (response.status < 200 || response.status >= 300) {
+              finish({ status: `http-${response.status}`, matches: [] });
+              return;
+            }
+            try {
+              finish({ status: 'ok', matches: normalizeCorpusMatches(JSON.parse(response.responseText || '{}')) });
+            } catch {
+              finish({ status: 'invalid-json', matches: [] });
+            }
+          },
+          onerror: () => finish({ status: 'error', matches: [] }),
+          ontimeout: () => finish({ status: 'timeout', matches: [] })
+        });
+      } catch {
+        finish({ status: 'error', matches: [] });
+      }
+    });
+  };
+
+  const buildContextPacket = async (responseText) => {
+    const latestUserText = getLatestUserText();
+    const pageContext = collectPageContext();
+    const memoryContext = state.contextMemory
+      .slice(-config.contextHistoryLimit)
+      .map((item) => [item.userText, item.question, ...(item.keywords || [])].filter(Boolean).join(' '))
+      .join('\n');
+
+    const searchSeed = latestUserText || responseText;
+    const keywords = extractKeywords(searchSeed, 8);
+    const expandedKeywords = extractKeywords([searchSeed, pageContext, memoryContext].filter(Boolean).join('\n'), 12);
+    const queryTerms = (keywords.length ? keywords : expandedKeywords).slice(0, 8);
+    const query = queryTerms.join(' ');
+
+    const corpus = await requestCorpusContext({ query, keywords: queryTerms, latestUserText });
+    const corpusText = corpus.matches.map((match) => match.text).join('\n');
+    const related = extractKeywords(corpusText, 8)
+      .filter((candidate) => !queryTerms.some((term) => term.toLowerCase() === candidate.toLowerCase()))
+      .slice(0, 4);
+
+    const packet = {
+      latestUserText,
+      keywords: queryTerms,
+      topic: extractTopic(searchSeed),
+      related,
+      corpusStatus: corpus.status,
+      matches: corpus.matches,
+      source: corpus.matches.length ? 'bridge' : 'local',
+      localContextChars: pageContext.length
+    };
+    state.lastContextPacket = packet;
+    return packet;
   };
 
   const weightedChoice = () => {
@@ -529,14 +742,44 @@
     return entries[entries.length - 1][0];
   };
 
-  const generateQuestion = (responseText) => {
+  const generateQuestion = async (responseText) => {
     const category = weightedChoice();
     const patterns = DRILL_PATTERNS[category];
     const template = patterns[Math.floor(Math.random() * patterns.length)];
-    return {
-      category,
-      question: template.replaceAll('{topic}', extractTopic(responseText))
-    };
+
+    if (!config.contextAwareDrill) {
+      return {
+        category,
+        question: template
+          .replaceAll('{topic}', extractTopic(responseText))
+          .replaceAll('{keywords}', extractKeywords(responseText, 8).join(', '))
+          .replaceAll('{related}', 'the strongest related prior thread'),
+        context: { source: 'disabled', keywords: [] }
+      };
+    }
+
+    const context = await buildContextPacket(responseText);
+    const keywordLabel = context.keywords.join(', ') || context.topic;
+    const relatedLabel = context.related.join(', ') || 'the strongest related prior thread';
+    let question = template
+      .replaceAll('{topic}', context.topic)
+      .replaceAll('{keywords}', keywordLabel)
+      .replaceAll('{related}', relatedLabel);
+
+    if (context.matches.length) {
+      const recovered = context.matches
+        .slice(0, 3)
+        .map((match) => {
+          const label = match.title ? `${match.title}: ` : '';
+          return `${label}${match.text.slice(0, 420)}`;
+        })
+        .join('\n- ');
+      question = `Use the recovered prior context below instead of restarting the subject.\n- ${recovered}\n\n${question}`;
+    } else {
+      question = `Before answering, search the available prior conversation/export history for: ${keywordLabel}. Recover relevant prior decisions, discoveries, corrections, unfinished objectives, and named connections. Then answer this question:\n\n${question}`;
+    }
+
+    return { category, question: question.slice(0, 3500), context };
   };
 
   const safeAutoAccept = () => {
@@ -603,8 +846,13 @@
     state.processing = true;
     const operationGeneration = state.operationGeneration;
     setStatus('Preparing');
-    const generated = generateQuestion(responseText);
-    audit('drill.preparing', { category: generated.category, responseHash });
+    const generated = await generateQuestion(responseText);
+    audit('drill.preparing', {
+      category: generated.category,
+      responseHash,
+      contextSource: generated.context?.source || 'unknown',
+      keywords: generated.context?.keywords || []
+    });
 
     try {
       const input = await waitUntil(() => getInput(), 4000) ? getInput() : null;
@@ -645,7 +893,18 @@
         platform: platform.id,
         category: generated.category,
         question: generated.question,
-        sourceHash: responseHash
+        sourceHash: responseHash,
+        contextSource: generated.context?.source || 'unknown',
+        keywords: generated.context?.keywords || []
+      });
+      persistContextMemory({
+        at: new Date().toISOString(),
+        platform: platform.id,
+        userText: generated.context?.latestUserText || '',
+        keywords: generated.context?.keywords || [],
+        question: generated.question,
+        sourceHash: responseHash,
+        contextSource: generated.context?.source || 'unknown'
       });
       audit('drill.submitted', { category: generated.category, sourceHash: responseHash });
       setStatus(`Drill ${state.drillCount}/${config.maxDrillDepth}`);
@@ -697,6 +956,8 @@
       config: { ...config },
       state: { drillCount: state.drillCount, startedAt: new Date(state.startedAt).toISOString() },
       history: state.history,
+      contextMemory: state.contextMemory,
+      lastContextPacket: state.lastContextPacket,
       audit: state.audit
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });

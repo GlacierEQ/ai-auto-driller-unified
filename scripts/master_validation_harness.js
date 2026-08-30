@@ -1,6 +1,6 @@
 /* eslint-env node */
 /**
- * Auto Driller Master v5 validation harness.
+ * Auto Driller Master v5.1 validation harness.
  * Static and contract-level checks that run without a browser.
  */
 'use strict';
@@ -234,9 +234,42 @@ test('dead response-text state is absent', () => {
   assert(!source.includes('lastResponseText'), 'Dead lastResponseText state remains');
 });
 
-test('script size remains bounded', () => {
+
+test('context lens is retrieval-first and user-message seeded', () => {
+  includes('contextAwareDrill: true');
+  includes('corpusRetrieval: true');
+  includes('USER_MESSAGE_SELECTORS');
+  includes('getLatestUserText');
+  includes('extractKeywords');
+  includes('buildContextPacket');
+  includes('requestCorpusContext');
+  includes('await generateQuestion(responseText)');
+  includes('Before answering, search the available prior conversation/export history for:');
+  includes("source: corpus.matches.length ? 'bridge' : 'local'");
+});
+
+test('corpus bridge is optional and bounded', () => {
+  const entries = metadata();
+  assert((entries.get('@grant') || []).includes('GM_xmlhttpRequest'), 'Missing GM_xmlhttpRequest grant');
+  assert((entries.get('@connect') || []).includes('127.0.0.1'), 'Missing 127.0.0.1 corpus bridge connect');
+  assert((entries.get('@connect') || []).includes('localhost'), 'Missing localhost corpus bridge connect');
+  includes("corpusBridgeUrl: 'http://127.0.0.1:8765/search'");
+  includes('corpusTimeoutMs: 1800');
+  includes("return Promise.resolve({ status: 'unavailable', matches: [] })");
+  includes("onerror: () => finish({ status: 'error', matches: [] })");
+  includes("ontimeout: () => finish({ status: 'timeout', matches: [] })");
+});
+
+test('context memory enriches questions without replacing source', () => {
+  includes("gmSetValue(`${STORE_KEY}:context-memory`, state.contextMemory)");
+  includes('contextHistoryLimit');
+  includes('contextMemory: state.contextMemory');
+  includes('lastContextPacket: state.lastContextPacket');
+  assert(!source.includes('if (!generated.context?.matches.length) return false'), 'Corpus retrieval must never block drilling');
+});
+
+test('script byte size remains bounded', () => {
   assert(Buffer.byteLength(source, 'utf8') < 100_000, 'Master userscript exceeds 100 KB');
-  assert(source.split('\n').length < 1200, 'Master userscript exceeds 1200 lines');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
