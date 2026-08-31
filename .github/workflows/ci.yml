@@ -102,8 +102,8 @@ jobs:
           grep -F 'if (!candidate.strong || !candidate.text) return' "$SCRIPT"
           grep -F 'Date.now() - rootsCachedAt < 750' "$SCRIPT"
           grep -F 'state.backoffUntil = 0' "$SCRIPT"
-          grep -F '// @version      5.1.0' "$SCRIPT"
-          grep -F "const VERSION = '5.1.0'" "$SCRIPT"
+          grep -F '// @version      5.1.1' "$SCRIPT"
+          grep -F "const VERSION = '5.1.1'" "$SCRIPT"
 
       - name: Check script sizes
         run: |

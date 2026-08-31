@@ -1,6 +1,6 @@
 /* eslint-env node */
 /**
- * Auto Driller Master v5.1 validation harness.
+ * Auto Driller Master v5.1.1 validation harness.
  * Static and contract-level checks that run without a browser.
  */
 'use strict';
@@ -246,6 +246,12 @@ test('context lens is retrieval-first and user-message seeded', () => {
   includes('await generateQuestion(responseText)');
   includes('Before answering, search the available prior conversation/export history for:');
   includes("source: corpus.matches.length ? 'bridge' : 'local'");
+});
+
+test('keyword extraction suppresses punctuation noise and phrase duplicates', () => {
+  includes("const cleanKeyword = (value) => normalize(value).replace(/^[._:/#-]+|[._:/#-]+$/g, '')");
+  includes('const coveredTokens = new Set(');
+  includes("if (!cleaned.includes(' ') && coveredTokens.has(key)) continue;");
 });
 
 test('corpus bridge is optional and bounded', () => {

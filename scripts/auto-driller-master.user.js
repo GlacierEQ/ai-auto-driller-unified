@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Auto-Driller Master
 // @namespace    https://github.com/GlacierEQ
-// @version      5.1.0
+// @version      5.1.1
 // @description  Retrieval-first cross-platform Auto Driller with context-aware questions, corpus continuity, verified input, retries, audit export, and isolated UI.
 // @author       GlacierEQ
 // @match        https://chatgpt.com/*
@@ -45,7 +45,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '5.1.0';
+  const VERSION = '5.1.1';
   const INSTANCE_KEY = 'autoDrillerMasterV51';
   const STORE_KEY = 'auto-driller-master:v5';
   const HUD_ID = 'auto-driller-master-host';
@@ -554,15 +554,20 @@
     const raw = normalize(text);
     if (!raw) return [];
 
+    const cleanKeyword = (value) => normalize(value).replace(/^[._:/#-]+|[._:/#-]+$/g, '');
     const properPhrases = [...raw.matchAll(/\b[A-Z][A-Za-z0-9_.-]+(?:\s+[A-Z][A-Za-z0-9_.-]+){1,3}\b/g)]
-      .map((match) => normalize(match[0]))
+      .map((match) => cleanKeyword(match[0]))
       .filter((value) => value.length >= 5);
+    const coveredTokens = new Set(
+      properPhrases.flatMap((phrase) => phrase.toLowerCase().split(/\s+/).map(cleanKeyword).filter(Boolean))
+    );
 
     const counts = new Map();
     const tokens = raw
       .toLowerCase()
       .replace(/[^a-z0-9\u4e00-\u9fff_.:/#-]/g, ' ')
       .split(/\s+/)
+      .map(cleanKeyword)
       .filter((word) => word.length > 3 && !STOP_WORDS.has(word));
 
     for (const token of tokens) counts.set(token, (counts.get(token) || 0) + 1);
@@ -578,10 +583,13 @@
     const output = [];
     const seen = new Set();
     for (const candidate of [...properPhrases, ...rankedTokens]) {
-      const key = candidate.toLowerCase();
+      const cleaned = cleanKeyword(candidate);
+      if (!cleaned) continue;
+      const key = cleaned.toLowerCase();
       if (seen.has(key)) continue;
+      if (!cleaned.includes(' ') && coveredTokens.has(key)) continue;
       seen.add(key);
-      output.push(candidate);
+      output.push(cleaned);
       if (output.length >= limit) break;
     }
     return output;

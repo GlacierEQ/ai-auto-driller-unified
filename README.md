@@ -2,7 +2,7 @@
 
 **Cross-platform userscript automation toolkit with deterministic repository validation and explicit browser-runtime boundaries.**
 
-The canonical runtime is [`scripts/auto-driller-master.user.js`](scripts/auto-driller-master.user.js), currently userscript version **5.1.0**. The repository also preserves platform-specific scripts, configuration documentation, and validation harnesses.
+The canonical runtime is [`scripts/auto-driller-master.user.js`](scripts/auto-driller-master.user.js), currently userscript version **5.1.1**. The repository also preserves platform-specific scripts, configuration documentation, and validation harnesses.
 
 ## What is verified here
 
@@ -82,4 +82,4 @@ A green repository workflow establishes **source-level userscript behavior and v
 
 ## Version boundary
 
-The canonical userscript declares `@version 5.1.0`. `package.json` is tooling metadata for the repository validation wrapper and remains `5.0.0`; userscript release identity is taken from the canonical userscript header/runtime constant rather than inferred from npm package metadata.
+The canonical userscript declares `@version 5.1.1`. `package.json` is tooling metadata for the repository validation wrapper and remains `5.0.0`; userscript release identity is taken from the canonical userscript header/runtime constant rather than inferred from npm package metadata.
