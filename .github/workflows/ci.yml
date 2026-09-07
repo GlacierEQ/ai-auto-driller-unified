@@ -48,6 +48,41 @@ jobs:
         run: npx eslint scripts/ --ext .js --ignore-pattern '*validation_harness.js'
         continue-on-error: true
 
+  corpus-bridge:
+    name: Corpus bridge retrieval checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact source identity
+        shell: bash
+        run: |
+          expected="${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "$expected"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags origin "${{ github.event.pull_request.base.sha }}"
+            git merge-base --is-ancestor "${{ github.event.pull_request.base.sha }}" HEAD
+          fi
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Compile corpus bridge
+        run: python -m py_compile bridge/corpus_bridge.py bridge/test_corpus_bridge.py
+
+      - name: Run corpus bridge tests
+        env:
+          PYTHONWARNINGS: error::ResourceWarning
+        run: python -m unittest -v bridge/test_corpus_bridge.py
+
   script-health:
     name: Userscript health checks
     runs-on: ubuntu-latest
