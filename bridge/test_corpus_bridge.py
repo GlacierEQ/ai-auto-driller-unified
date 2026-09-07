@@ -8,7 +8,7 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from corpus_bridge import CorpusBridgeService, CorpusIndex, make_handler
+from bridge.corpus_bridge import CorpusBridgeService, CorpusIndex, make_handler
 
 
 class CorpusBridgeTests(unittest.TestCase):

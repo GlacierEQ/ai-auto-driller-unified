@@ -81,7 +81,7 @@ jobs:
       - name: Run corpus bridge tests
         env:
           PYTHONWARNINGS: error::ResourceWarning
-        run: python -m unittest -v bridge/test_corpus_bridge.py
+        run: python -m unittest -v bridge.test_corpus_bridge
 
   script-health:
     name: Userscript health checks
