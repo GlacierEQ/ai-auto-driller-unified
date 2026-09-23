@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AI Auto-Driller Master
 // @namespace    https://github.com/GlacierEQ
-// @version      5.1.1
-// @description  Retrieval-first cross-platform Auto Driller with context-aware questions, corpus continuity, verified input, retries, audit export, and isolated UI.
+// @version      6.0.0
+// @description  Progress-first cross-platform MoreShow engine: context recovery, deterministic next-best-action selection, current-source technical frontiers, execution/verification gates, retries, receipts, and isolated UI.
 // @author       GlacierEQ
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -45,9 +45,10 @@
 (() => {
   'use strict';
 
-  const VERSION = '5.1.1';
-  const INSTANCE_KEY = 'autoDrillerMasterV51';
-  const STORE_KEY = 'auto-driller-master:v5';
+  const VERSION = '6.0.0';
+  const INSTANCE_KEY = 'autoDrillerMasterV60';
+  const STORE_KEY = 'auto-driller-master:v6';
+  const LEGACY_STORE_KEY = 'auto-driller-master:v5';
   const HUD_ID = 'auto-driller-master-host';
 
   if (document.documentElement.dataset[INSTANCE_KEY] === '1') return;
@@ -57,17 +58,21 @@
     enabled: true,
     autoDrill: false,
     autoAccept: false,
-    maxDrillDepth: 5,
-    drillIntervalMs: 7000,
+    maxDrillDepth: 12,
+    drillIntervalMs: 9000,
     userQuietMs: 10000,
-    responseStableMs: 1400,
+    responseStableMs: 1600,
     contextAwareDrill: true,
     corpusRetrieval: true,
     corpusBridgeUrl: 'http://127.0.0.1:8765/search',
-    corpusTimeoutMs: 1800,
-    corpusTopK: 6,
-    contextWindowChars: 8000,
-    contextHistoryLimit: 12,
+    corpusTimeoutMs: 2200,
+    corpusTopK: 8,
+    contextWindowChars: 12000,
+    contextHistoryLimit: 20,
+    requireFreshSources: true,
+    minimumProgressScore: 55,
+    sameFailureEscalation: 2,
+    missionMaxChars: 6200,
     debug: false,
     minimized: false
   });
@@ -200,7 +205,7 @@
     ? GM_registerMenuCommand
     : () => '';
 
-  const storedConfig = gmGetValue(`${STORE_KEY}:config`, {});
+  const storedConfig = gmGetValue(`${STORE_KEY}:config`, gmGetValue(`${LEGACY_STORE_KEY}:config`, {}));
   const config = { ...DEFAULTS, ...(storedConfig && typeof storedConfig === 'object' ? storedConfig : {}) };
   const clampNumber = (value, minimum, maximum, fallback) => {
     const numeric = Number(value);
@@ -209,13 +214,18 @@
   config.enabled = Boolean(config.enabled);
   config.autoDrill = Boolean(config.autoDrill);
   config.autoAccept = Boolean(config.autoAccept);
-  config.contextAwareDrill = Boolean(config.contextAwareDrill);
-  config.corpusRetrieval = Boolean(config.corpusRetrieval);
+  // Context recovery is a hard invariant in v6; stale saved settings cannot disable it.
+  config.contextAwareDrill = true;
+  config.corpusRetrieval = true;
   config.corpusBridgeUrl = String(config.corpusBridgeUrl || DEFAULTS.corpusBridgeUrl).trim();
   config.corpusTimeoutMs = clampNumber(config.corpusTimeoutMs, 250, 10000, DEFAULTS.corpusTimeoutMs);
   config.corpusTopK = Math.round(clampNumber(config.corpusTopK, 1, 20, DEFAULTS.corpusTopK));
   config.contextWindowChars = Math.round(clampNumber(config.contextWindowChars, 1000, 30000, DEFAULTS.contextWindowChars));
   config.contextHistoryLimit = Math.round(clampNumber(config.contextHistoryLimit, 1, 50, DEFAULTS.contextHistoryLimit));
+  config.requireFreshSources = config.requireFreshSources !== false;
+  config.minimumProgressScore = Math.round(clampNumber(config.minimumProgressScore, 20, 95, DEFAULTS.minimumProgressScore));
+  config.sameFailureEscalation = Math.round(clampNumber(config.sameFailureEscalation, 1, 5, DEFAULTS.sameFailureEscalation));
+  config.missionMaxChars = Math.round(clampNumber(config.missionMaxChars, 2500, 10000, DEFAULTS.missionMaxChars));
   config.debug = Boolean(config.debug);
   config.minimized = Boolean(config.minimized);
   config.maxDrillDepth = Math.round(clampNumber(config.maxDrillDepth, 1, 50, DEFAULTS.maxDrillDepth));
@@ -225,7 +235,7 @@
   if (platform.manualOnly) config.autoDrill = false;
   if (!platform.approval) config.autoAccept = false;
 
-  const storedContextMemory = gmGetValue(`${STORE_KEY}:context-memory`, []);
+  const storedContextMemory = gmGetValue(`${STORE_KEY}:context-memory`, gmGetValue(`${LEGACY_STORE_KEY}:context-memory`, []));
 
   const state = {
     startedAt: Date.now(),
@@ -233,9 +243,16 @@
     processing: false,
     lastDrillAt: 0,
     consecutiveFailures: 0,
+    sameProgressFailureCount: 0,
+    lastProgressScore: null,
+    lastProgressClass: 'UNASSESSED',
+    lastRoute: 'NONE',
+    lastMission: null,
+    progressReceipts: [],
     backoffUntil: 0,
     lastTrustedActivityAt: 0,
     lastHandledHash: '',
+    lastHumanUserHash: '',
     candidateHash: '',
     candidateSince: 0,
     operationGeneration: 0,
@@ -251,60 +268,31 @@
     ticker: null
   };
 
-  const DRILL_PATTERNS = Object.freeze({
-    continuity: [
-      'Search the available prior conversation/export history for {keywords}. Recover the strongest relevant thread before answering. Given that prior context, what unresolved connection most changes how {topic} should be handled now?',
-      'Search prior chat/export history for {keywords}. What earlier decision, discovery, contradiction, or unfinished objective should be carried forward before taking the next step on {topic}?'
-    ],
-    connection: [
-      'Using the recovered history, connect {topic} to {related}. What important relationship or consequence has not been fully developed yet?',
-      'Cross-reference {keywords} against earlier conversations. Which prior event, person, argument, or technical decision most strongly changes the next question about {topic}?'
-    ],
-    clarification: [
-      'Clarify the most important ambiguity in {topic}, then provide a concrete example.',
-      'Break {topic} into its essential components and explain how they relate.'
-    ],
-    depth: [
-      'What underlying mechanisms or assumptions control {topic}?',
-      'Take {topic} one level deeper and identify what is usually overlooked.'
-    ],
-    practical: [
-      'Turn {topic} into a step-by-step implementation with clear acceptance criteria.',
-      'What is the strongest practical workflow for applying {topic} now?'
-    ],
-    comparative: [
-      'Compare {topic} with the strongest realistic alternative and recommend one.',
-      'What tradeoffs would change the decision about {topic}?'
-    ],
-    verification: [
-      'Audit the claims about {topic}. Separate verified facts, inferences, assumptions, and unresolved gaps.',
-      'What evidence or tests would falsify the current conclusions about {topic}?'
-    ],
-    technical: [
-      'Design a production-grade architecture for {topic}, including failure modes and observability.',
-      'Identify the main performance, security, and reliability risks in {topic}, then harden them.'
-    ],
-    problem_solving: [
-      'Find the highest-leverage unresolved problem in {topic} and solve it concretely.',
-      'What is currently blocking completion of {topic}, and what exact action removes that block?'
-    ],
-    integration: [
-      'Map how {topic} should integrate with the surrounding systems, contracts, and data flows.',
-      'Identify the dependencies and downstream effects of implementing {topic}.'
-    ]
+  const MISSION_PREFIX = '[MORE-SHOW MISSION v6]';
+
+  const DOMAIN_RULES = Object.freeze([
+    { id: 'coding', pattern: /\b(code|coding|repo|repository|github|git|commit|pull request|pr\b|typescript|javascript|python|rust|go\b|java\b|sdk|api|mcp|server|client|function|class|schema|migration|database|sql|build|ci\b|test|deploy|runtime|package|dependency|framework|library|compiler|architecture)\b/i },
+    { id: 'debugging', pattern: /\b(debug|bug|error|exception|failed|failure|broken|regression|stack trace|traceback|doesn.?t work|not working|root cause)\b/i },
+    { id: 'connector', pattern: /\b(connector|plugin|integration|provider|oauth|permission|scope|webhook|mcp|api|readback|receipt|manifest)\b/i },
+    { id: 'research', pattern: /\b(research|source|evidence|paper|study|latest|current|recent|verify|compare|citation|documentation|specification|release notes)\b/i },
+    { id: 'casework', pattern: /\b(case|evidence|complaint|claim|discovery|timeline|witness|record|custody|preservation|foia|subpoena|statute|damages|allegation)\b/i },
+    { id: 'writing', pattern: /\b(write|rewrite|draft|essay|email|letter|proposal|report|article|post|document|brief)\b/i },
+    { id: 'planning', pattern: /\b(plan|roadmap|strategy|design|architecture|workflow|blueprint|prioritize|next step)\b/i }
+  ]);
+
+  const ROUTE_PRIORITY = Object.freeze({
+    REPAIR_ARCHITECTURE: 100,
+    VERIFY_AND_REPAIR: 90,
+    TECHNICAL_FRONTIER: 85,
+    EXECUTE: 80,
+    RESEARCH_AND_APPLY: 72,
+    INTEGRATE: 66,
+    DELIVER: 62,
+    FALSIFY: 58,
+    STOP: 10
   });
-  const PATTERN_WEIGHTS = Object.freeze({
-    continuity: 7,
-    connection: 5,
-    clarification: 1,
-    depth: 2,
-    practical: 4,
-    comparative: 2,
-    verification: 4,
-    technical: 4,
-    problem_solving: 4,
-    integration: 3
-  });
+
+  const SOURCE_POLICY = `For technical/coding work where freshness can matter, search CURRENT PRIMARY SOURCES before selecting the implementation frontier. Prefer official specifications, official documentation, release notes/changelogs, and upstream source repositories. Find only developments that create concrete leverage for the active objective. Cite/link the sources you actually used. Never invent freshness, versions, APIs, releases, or source claims. If current-source retrieval is unavailable, say so and continue only with verified local/repository state.`;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
@@ -597,12 +585,17 @@
 
   const extractTopic = (text) => extractKeywords(text, 5).join(' ') || 'the current subject';
 
+  const isGeneratedMissionText = (text) => normalize(text).startsWith(MISSION_PREFIX);
+
   const getLatestUserText = () => {
     const matches = queryAll(USER_MESSAGE_SELECTORS)
       .filter(isVisible)
       .map((element) => normalize(element.textContent || element.innerText || ''))
       .filter(Boolean);
-    return matches.length ? matches[matches.length - 1] : '';
+    for (let index = matches.length - 1; index >= 0; index -= 1) {
+      if (!isGeneratedMissionText(matches[index])) return matches[index];
+    }
+    return '';
   };
 
   const collectPageContext = () => {
@@ -611,7 +604,7 @@
     const pieces = [];
     for (const element of queryAll(selectors).filter(isVisible)) {
       const text = normalize(element.textContent || element.innerText || '');
-      if (!text || text.length < 3) continue;
+      if (!text || text.length < 3 || isGeneratedMissionText(text)) continue;
       const hash = hashText(text);
       if (seen.has(hash)) continue;
       seen.add(hash);
@@ -710,7 +703,7 @@
     const pageContext = collectPageContext();
     const memoryContext = state.contextMemory
       .slice(-config.contextHistoryLimit)
-      .map((item) => [item.userText, item.question, ...(item.keywords || [])].filter(Boolean).join(' '))
+      .map((item) => [item.userText, item.mission || item.question, item.route, ...(item.keywords || [])].filter(Boolean).join(' '))
       .join('\n');
 
     const searchSeed = latestUserText || responseText;
@@ -739,55 +732,220 @@
     return packet;
   };
 
-  const weightedChoice = () => {
-    const entries = Object.entries(PATTERN_WEIGHTS);
-    const total = entries.reduce((sum, [, weight]) => sum + weight, 0);
-    let cursor = Math.random() * total;
-    for (const [category, weight] of entries) {
-      cursor -= weight;
-      if (cursor <= 0) return category;
+  const classifyDomain = (text) => {
+    const source = normalize(text);
+    let best = { id: 'general', hits: 0 };
+    for (const rule of DOMAIN_RULES) {
+      const matches = source.match(new RegExp(rule.pattern.source, `${rule.pattern.flags.includes('g') ? rule.pattern.flags : `${rule.pattern.flags}g`}`));
+      const hits = matches ? matches.length : 0;
+      if (hits > best.hits) best = { id: rule.id, hits };
     }
-    return entries[entries.length - 1][0];
+    return best.id;
   };
 
-  const generateQuestion = async (responseText) => {
-    const category = weightedChoice();
-    const patterns = DRILL_PATTERNS[category];
-    const template = patterns[Math.floor(Math.random() * patterns.length)];
+  const responseSignals = (responseText, latestUserText = '') => {
+    const response = normalize(responseText);
+    const user = normalize(latestUserText);
+    const combined = `${user}\n${response}`;
+    const lower = combined.toLowerCase();
+    const userCorrection = /(?:not making anything happen|nothing (?:is|was) happening|still (?:not|isn.?t)|you (?:didn.?t|did not)|wrong again|same (?:shit|thing|failure)|doesn.?t work|not working|stop (?:doing|repeating)|waste(?:d|ing)? (?:my )?time|not what i (?:asked|wanted|meant))/i.test(user);
+    const actionEvidence = /\b(implemented|created|updated|patched|changed|wrote|committed|pushed|merged|deployed|executed|ran|installed|configured|fixed|repaired|materialized|synced|uploaded|saved|generated|migrated|removed|added|wired|bound|promoted)\b/i.test(response);
+    const verificationEvidence = /\b(test(?:ed|s)?|pass(?:ed)?|verified|readback|receipt|assert(?:ed|ion)?|validation|validated|exit code|status|sha(?:256)?|checksum|health check|provider readback|regression)\b/i.test(response);
+    const artifactEvidence = /(?:\bcommit\b|\bPR\s*#?\d+|\bpull request\b|\bmanifest\b|\bmigration\b|\bartifact\b|\breceipt\b|\b[a-f0-9]{7,40}\b|\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.\/-]+)/i.test(response);
+    const blockerEvidence = /\b(blocked|blocker|failed|failure|error|unavailable|missing|required|cannot|can.?t|unable|permission|auth(?:entication)? required|rate limit)\b/i.test(response);
+    const uncertaintyEvidence = /\b(unverified|unknown|uncertain|assumption|inference|appears|probably|likely|might|may\b)/i.test(response);
+    const sourceEvidence = /(?:https?:\/\/|\bcite\b|\bcitation\b|official docs|documentation|release notes|changelog|specification|upstream|github\.com)/i.test(response);
+    const futureOnly = !actionEvidence && /\b(should|would|could|recommend|next step|need to|we need|we should|plan to|can then|could then|propose)\b/i.test(response);
+    const completionEvidence = /\b(done|complete(?:d)?|finished|closed|resolved|active_verified|readiness pass|all tests pass(?:ed)?)\b/i.test(response);
+    const noNextValueEvidence = /\b(no remaining (?:work|tasks|issues)|nothing (?:else|further) (?:to do|needed)|no further action|all objectives (?:are )?satisfied|no unresolved (?:work|items|issues))\b/i.test(response);
+    const repetitionEvidence = state.lastMission && normalize(state.lastMission.objective) && lower.includes(normalize(state.lastMission.objective).toLowerCase().slice(0, 80));
+    return {
+      userCorrection,
+      actionEvidence,
+      verificationEvidence,
+      artifactEvidence,
+      blockerEvidence,
+      uncertaintyEvidence,
+      sourceEvidence,
+      futureOnly,
+      completionEvidence,
+      noNextValueEvidence,
+      repetitionEvidence
+    };
+  };
 
-    if (!config.contextAwareDrill) {
-      return {
-        category,
-        question: template
-          .replaceAll('{topic}', extractTopic(responseText))
-          .replaceAll('{keywords}', extractKeywords(responseText, 8).join(', '))
-          .replaceAll('{related}', 'the strongest related prior thread'),
-        context: { source: 'disabled', keywords: [] }
-      };
+  const evaluatePreviousMissionOutcome = (responseText, latestUserText = '') => {
+    if (!state.lastMission) return null;
+    const signals = responseSignals(responseText, latestUserText);
+    let score = 0;
+    if (signals.actionEvidence) score += 32;
+    if (signals.verificationEvidence) score += 26;
+    if (signals.artifactEvidence) score += 18;
+    if (signals.sourceEvidence && state.lastMission.requiresFreshSources) score += 14;
+    if (signals.blockerEvidence && /(?:alternate|fallback|reroute|different route|next route|preserv)/i.test(responseText)) score += 16;
+    if (signals.futureOnly) score -= 25;
+    if (signals.repetitionEvidence) score -= 15;
+    if (signals.userCorrection) score -= 35;
+    score = Math.max(0, Math.min(100, score));
+
+    let progressClass = score >= 80 ? 'VERIFIED_PROGRESS' : score >= config.minimumProgressScore ? 'PROGRESS' : 'INSUFFICIENT_PROGRESS';
+    if (signals.userCorrection) progressClass = 'USER_REPORTED_FAILURE';
+
+    if (score < config.minimumProgressScore || signals.userCorrection) state.sameProgressFailureCount += 1;
+    else state.sameProgressFailureCount = 0;
+
+    state.lastProgressScore = score;
+    state.lastProgressClass = progressClass;
+    const receipt = {
+      at: new Date().toISOString(),
+      missionId: state.lastMission.id,
+      route: state.lastMission.route,
+      score,
+      progressClass,
+      signals,
+      responseHash: hashText(responseText)
+    };
+    state.progressReceipts.push(receipt);
+    if (state.progressReceipts.length > 100) state.progressReceipts.splice(0, state.progressReceipts.length - 100);
+    audit('progress.assessed', receipt);
+    return receipt;
+  };
+
+  const candidateRoutes = ({ domain, signals, context, previousOutcome }) => {
+    const topic = context.topic;
+    const candidates = [];
+    const add = (route, objective, rationale, acceptance, bonus = 0, requiresFreshSources = false) => {
+      let score = ROUTE_PRIORITY[route] + bonus;
+      if (state.lastRoute === route && previousOutcome && previousOutcome.score < config.minimumProgressScore) score -= 25;
+      if (route === 'REPAIR_ARCHITECTURE' && state.sameProgressFailureCount >= config.sameFailureEscalation) score += 40;
+      if (route === 'VERIFY_AND_REPAIR' && signals.actionEvidence && !signals.verificationEvidence) score += 30;
+      if (route === 'EXECUTE' && (signals.futureOnly || (!signals.actionEvidence && !signals.completionEvidence))) score += 25;
+      if (route === 'TECHNICAL_FRONTIER' && domain === 'coding') score += 28;
+      if (route === 'TECHNICAL_FRONTIER' && signals.actionEvidence && !signals.verificationEvidence) score -= 45;
+      if (route === 'TECHNICAL_FRONTIER' && signals.completionEvidence && signals.verificationEvidence) score -= 55;
+      if (route === 'RESEARCH_AND_APPLY' && (domain === 'research' || signals.uncertaintyEvidence)) score += 20;
+      if (route === 'INTEGRATE' && signals.completionEvidence && signals.verificationEvidence) score += 70;
+      if (route === 'INTEGRATE' && signals.noNextValueEvidence) score -= 220;
+      if (route === 'DELIVER' && domain === 'writing') score += 22;
+      if (signals.userCorrection && route !== 'REPAIR_ARCHITECTURE') score -= 45;
+      candidates.push({ route, objective, rationale, acceptance, score, requiresFreshSources });
+    };
+
+    if (signals.userCorrection || state.sameProgressFailureCount >= config.sameFailureEscalation) {
+      add(
+        'REPAIR_ARCHITECTURE',
+        `Repair the mechanism that failed to produce observable progress on ${topic}; do not patch the wording of the failed approach.`,
+        'A user-reported or repeated progress failure invalidates the current route and requires a materially different mechanism.',
+        'Identify the failed assumption, choose a materially different route, execute it now, and prove the exact reported failure no longer occurs.',
+        35,
+        domain === 'coding'
+      );
     }
 
+    if (signals.actionEvidence && !signals.verificationEvidence) {
+      add('VERIFY_AND_REPAIR', `Verify the claimed state change for ${topic}, falsify it, repair any failure, and preserve provider/repository readback.`, 'Execution claims without readback are not finished.', 'Produce an independent test/readback plus a durable receipt or exact artifact identifier.');
+    }
+
+    if (domain === 'coding') {
+      add(
+        'TECHNICAL_FRONTIER',
+        `Use the current implementation of ${topic} as a springboard: discover the strongest current technical frontier, then implement and test the highest-leverage upgrade now.`,
+        'Coding progress should import current primary-source information and convert it into a concrete capability gain, not merely discuss technology.',
+        'Use current authoritative technical sources, identify the concrete new capability they unlock here, make the code/repository change, and run falsifiable tests.',
+        15,
+        true
+      );
+    }
+
+    if (signals.futureOnly || (!signals.actionEvidence && !signals.completionEvidence)) {
+      add('EXECUTE', `Turn the current analysis/design for ${topic} into real state change using available tools, files, repositories, or providers.`, 'The response contains plans or recommendations without sufficient observable execution.', 'Create or change a real artifact/state, then read it back or test it.');
+    }
+
+    if (domain === 'research' || signals.uncertaintyEvidence || (domain === 'coding' && !signals.sourceEvidence)) {
+      add('RESEARCH_AND_APPLY', `Acquire the strongest current evidence relevant to ${topic}, determine what it changes, and immediately apply that finding to the active objective.`, 'Fresh evidence is useful only when it changes a decision or implementation.', 'Use primary/current sources, state the concrete consequence, then execute or revise the active work accordingly.', 0, true);
+    }
+
+    if (signals.completionEvidence && signals.verificationEvidence) {
+      add('INTEGRATE', `Compound the verified result for ${topic} into the highest-leverage adjacent system instead of re-solving completed work.`, 'Verified completion should create downstream leverage.', 'Produce one new verified integration or durable downstream capability without regressing the completed state.');
+    }
+
+    if (domain === 'writing') {
+      add('DELIVER', `Convert the current material on ${topic} into the strongest finished artifact required by the underlying objective.`, 'Writing work should end in a usable deliverable rather than recursive commentary.', 'Produce the finished artifact and perform a concrete quality/completeness check.');
+    }
+
+    add('FALSIFY', `Attack the weakest assumption controlling ${topic}; run the strongest available test and let the result change the route.`, 'Falsification prevents confident repetition of a wrong abstraction.', 'Name the controlling assumption, test it with observable evidence, and update the implementation based on the result.');
+
+    if (signals.completionEvidence && signals.verificationEvidence && !signals.blockerEvidence) {
+      add('STOP', `Stop recursive expansion of ${topic} unless a materially higher-leverage adjacent objective is demonstrated.`, 'Continuation is not intrinsically valuable.', 'Either identify a concrete positive-value next state change or explicitly stop rather than manufacture another discussion turn.', signals.noNextValueEvidence ? 220 : -20);
+    }
+
+    return candidates.sort((a, b) => b.score - a.score || a.route.localeCompare(b.route));
+  };
+
+  const compactRecoveredContext = (context) => {
+    if (!context.matches.length) return '';
+    return context.matches.slice(0, 4).map((match, index) => {
+      const label = match.title ? `${match.title}: ` : '';
+      return `${index + 1}. ${label}${match.text.slice(0, 520)}`;
+    }).join('\n');
+  };
+
+  const compileMission = ({ selected, candidates, context, responseText, previousOutcome, domain }) => {
+    const recovered = compactRecoveredContext(context);
+    const candidateSummary = candidates.slice(0, 4).map((candidate) => `${candidate.route}:${candidate.score}`).join(', ');
+    const previous = previousOutcome
+      ? `Previous mission outcome: ${previousOutcome.progressClass} (${previousOutcome.score}/100). Repeated progress failures: ${state.sameProgressFailureCount}.`
+      : 'Previous mission outcome: none — establish the next real state transition from the current response.';
+    const sourceRule = selected.requiresFreshSources && config.requireFreshSources ? `\nCURRENT-SOURCE REQUIREMENT:\n${SOURCE_POLICY}` : '';
+    const contextRule = recovered
+      ? `\nRECOVERED PRIOR CONTEXT (apply it; do not restart):\n${recovered}`
+      : `\nCONTEXT RECOVERY REQUIREMENT:\nSearch/recover relevant prior conversation, project, repository, file, memory, or connected-source state before acting. Do not ask the user to repeat information that is already recoverable.`;
+    const responseDigest = normalize(responseText).slice(-1800);
+
+    return `${MISSION_PREFIX}\n\n` +
+      `MODE: ${selected.route}\nDOMAIN: ${domain}\nTOPIC: ${context.topic}\n` +
+      `OBJECTIVE: ${selected.objective}\n` +
+      `WHY THIS ROUTE: ${selected.rationale}\n` +
+      `${previous}\n` +
+      `Internal route scores (do not merely discuss these): ${candidateSummary}.\n` +
+      `${contextRule}${sourceRule}\n\n` +
+      `CURRENT RESPONSE STATE:\n${responseDigest}\n\n` +
+      `EXECUTION LAW:\n` +
+      `1. Recover relevant context/state first.\n` +
+      `2. Treat the current response as a springboard, not a prompt to paraphrase.\n` +
+      `3. Generate materially different routes internally, select the strongest by objective gain, compatibility, reversibility, proof strength, dependency preservation, and downstream leverage. Do not dump the route brainstorm on the user.\n` +
+      `4. Execute the selected route NOW with available tools/connectors/repositories/files/browser capabilities. Planning-only is failure when execution is available.\n` +
+      `5. If a route is blocked, preserve the blocker as evidence and change route; do not change the objective.\n` +
+      `6. Verify/falsify the resulting real state with tests, provider readback, repository state, receipts, hashes, artifacts, or other observable evidence.\n` +
+      `7. Preserve what changed so the next turn starts from the new state.\n` +
+      `8. Do not ask a generic follow-up question. Do not say "go deeper" or restate the plan. Do not redo solved work.\n` +
+      `9. If no next action has positive expected value, STOP instead of manufacturing continuation.\n\n` +
+      `ACCEPTANCE CRITERIA:\n${selected.acceptance}\n` +
+      `The response must make the resulting state, evidence, and remaining frontier inspectable. Meta-language about progress does not count as progress.`;
+  };
+
+  const generateMission = async (responseText, previousOutcome = null, freshHumanUserText = '') => {
     const context = await buildContextPacket(responseText);
-    const keywordLabel = context.keywords.join(', ') || context.topic;
-    const relatedLabel = context.related.join(', ') || 'the strongest related prior thread';
-    let question = template
-      .replaceAll('{topic}', context.topic)
-      .replaceAll('{keywords}', keywordLabel)
-      .replaceAll('{related}', relatedLabel);
-
-    if (context.matches.length) {
-      const recovered = context.matches
-        .slice(0, 3)
-        .map((match) => {
-          const label = match.title ? `${match.title}: ` : '';
-          return `${label}${match.text.slice(0, 420)}`;
-        })
-        .join('\n- ');
-      question = `Use the recovered prior context below instead of restarting the subject.\n- ${recovered}\n\n${question}`;
-    } else {
-      question = `Before answering, search the available prior conversation/export history for: ${keywordLabel}. Recover relevant prior decisions, discoveries, corrections, unfinished objectives, and named connections. Then answer this question:\n\n${question}`;
-    }
-
-    return { category, question: question.slice(0, 3500), context };
+    const signals = responseSignals(responseText, freshHumanUserText);
+    const domain = classifyDomain([context.latestUserText, responseText, context.matches.map((match) => match.text).join('\n')].join('\n'));
+    const candidates = candidateRoutes({ domain, signals, context, previousOutcome });
+    const selected = candidates[0];
+    const id = `${Date.now().toString(36)}-${hashText(`${selected.route}:${context.topic}:${responseText.slice(-400)}`)}`;
+    const mission = compileMission({ selected, candidates, context, responseText, previousOutcome, domain }).slice(0, config.missionMaxChars);
+    return {
+      id,
+      route: selected.route,
+      category: selected.route.toLowerCase(),
+      objective: selected.objective,
+      score: selected.score,
+      acceptance: selected.acceptance,
+      requiresFreshSources: selected.requiresFreshSources,
+      mission,
+      context,
+      domain,
+      signals,
+      candidates: candidates.slice(0, 5).map(({ route, score }) => ({ route, score }))
+    };
   };
 
   const safeAutoAccept = () => {
@@ -833,7 +991,7 @@
     if (!manual && !config.autoDrill) return false;
     if (!manual && Date.now() < state.backoffUntil) return false;
     if (state.drillCount >= config.maxDrillDepth) {
-      setStatus('Depth limit');
+      setStatus('Depth limit — inspect progress receipts before continuing');
       return false;
     }
     if (!manual && Date.now() - state.lastDrillAt < config.drillIntervalMs) return false;
@@ -844,7 +1002,7 @@
     if (!responseText) {
       const diagnostics = getDiagnostics();
       setStatus(`No response found • input ${diagnostics.input} • response ${diagnostics.response}`);
-      audit('drill.blocked', { reason: 'no-response' });
+      audit('mission.blocked', { reason: 'no-response' });
       return false;
     }
 
@@ -853,29 +1011,46 @@
 
     state.processing = true;
     const operationGeneration = state.operationGeneration;
-    setStatus('Preparing');
-    const generated = await generateQuestion(responseText);
-    audit('drill.preparing', {
-      category: generated.category,
-      responseHash,
-      contextSource: generated.context?.source || 'unknown',
-      keywords: generated.context?.keywords || []
-    });
+    setStatus('Recovering context + selecting route');
 
     try {
+      const latestHumanUserText = getLatestUserText();
+      const latestHumanUserHash = latestHumanUserText ? hashText(latestHumanUserText) : '';
+      const humanMessageIsFresh = Boolean(latestHumanUserHash && latestHumanUserHash !== state.lastHumanUserHash);
+      const freshHumanUserText = humanMessageIsFresh ? latestHumanUserText : '';
+      const previousOutcome = evaluatePreviousMissionOutcome(responseText, freshHumanUserText);
+      const generated = await generateMission(responseText, previousOutcome, freshHumanUserText);
+      assertOperationActive(operationGeneration);
+
+      audit('mission.selected', {
+        missionId: generated.id,
+        route: generated.route,
+        domain: generated.domain,
+        routeScore: generated.score,
+        candidates: generated.candidates,
+        responseHash,
+        contextSource: generated.context?.source || 'unknown',
+        corpusStatus: generated.context?.corpusStatus || 'unknown',
+        keywords: generated.context?.keywords || [],
+        previousOutcome
+      });
+
       const input = await waitUntil(() => getInput(), 4000) ? getInput() : null;
       assertOperationActive(operationGeneration);
-      if (!input) { const diagnostics = getDiagnostics(); throw new Error(`Prompt input not found (input ${diagnostics.input}, response ${diagnostics.response})`); }
+      if (!input) {
+        const diagnostics = getDiagnostics();
+        throw new Error(`Prompt input not found (input ${diagnostics.input}, response ${diagnostics.response})`);
+      }
       if (normalize(elementValue(input))) throw new Error('Prompt input is not empty');
 
       assertOperationActive(operationGeneration);
-      setInputValue(input, generated.question);
+      setInputValue(input, generated.mission);
       const inserted = await waitUntil(
-        () => normalize(elementValue(input)).includes(normalize(generated.question).slice(0, 24)),
+        () => normalize(elementValue(input)).includes(MISSION_PREFIX),
         1800
       );
       assertOperationActive(operationGeneration);
-      if (!inserted) throw new Error('Prompt injection could not be verified');
+      if (!inserted) throw new Error('Mission injection could not be verified');
 
       const submitButton = getSubmitButton(input);
       assertOperationActive(operationGeneration);
@@ -889,45 +1064,76 @@
         started = await verifySubmissionStarted(input, responseHash, manual);
       }
       assertOperationActive(operationGeneration);
-      if (!started) throw new Error('Submission could not be verified');
+      if (!started) throw new Error('Mission submission could not be verified');
 
       state.drillCount += 1;
       state.lastDrillAt = Date.now();
       state.consecutiveFailures = 0;
       state.backoffUntil = 0;
       state.lastHandledHash = responseHash;
+      if (latestHumanUserHash) state.lastHumanUserHash = latestHumanUserHash;
+      state.lastRoute = generated.route;
+      state.lastMission = {
+        id: generated.id,
+        route: generated.route,
+        domain: generated.domain,
+        objective: generated.objective,
+        acceptance: generated.acceptance,
+        requiresFreshSources: generated.requiresFreshSources,
+        dispatchedAt: new Date().toISOString(),
+        sourceHash: responseHash
+      };
       state.history.push({
         at: new Date().toISOString(),
         platform: platform.id,
-        category: generated.category,
-        question: generated.question,
+        missionId: generated.id,
+        route: generated.route,
+        domain: generated.domain,
+        routeScore: generated.score,
+        objective: generated.objective,
+        acceptance: generated.acceptance,
+        mission: generated.mission,
         sourceHash: responseHash,
         contextSource: generated.context?.source || 'unknown',
-        keywords: generated.context?.keywords || []
+        corpusStatus: generated.context?.corpusStatus || 'unknown',
+        keywords: generated.context?.keywords || [],
+        candidates: generated.candidates,
+        previousOutcome
       });
       persistContextMemory({
         at: new Date().toISOString(),
         platform: platform.id,
         userText: generated.context?.latestUserText || '',
         keywords: generated.context?.keywords || [],
-        question: generated.question,
+        route: generated.route,
+        mission: generated.mission,
+        missionId: generated.id,
         sourceHash: responseHash,
-        contextSource: generated.context?.source || 'unknown'
+        contextSource: generated.context?.source || 'unknown',
+        previousProgressScore: previousOutcome?.score ?? null,
+        previousProgressClass: previousOutcome?.progressClass ?? null
       });
-      audit('drill.submitted', { category: generated.category, sourceHash: responseHash });
-      setStatus(`Drill ${state.drillCount}/${config.maxDrillDepth}`);
+      audit('mission.dispatched', {
+        missionId: generated.id,
+        route: generated.route,
+        domain: generated.domain,
+        sourceHash: responseHash,
+        note: 'Dispatch is not counted as verified progress; the resulting response is assessed on the next cycle.'
+      });
+      setStatus(`${generated.route} • dispatched • prior progress ${state.lastProgressScore ?? 'n/a'}`);
+      updateHud();
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (error instanceof Error && error.name === 'AbortError') {
-        audit('drill.cancelled', { reason: message });
+        audit('mission.cancelled', { reason: message });
         setStatus('Cancelled');
         return false;
       }
       state.consecutiveFailures += 1;
       const backoffMs = Math.min(30000, 2000 * (2 ** (state.consecutiveFailures - 1)));
       state.backoffUntil = Date.now() + backoffMs;
-      audit('drill.failed', { error: message, backoffMs, consecutiveFailures: state.consecutiveFailures });
+      audit('mission.failed', { error: message, backoffMs, consecutiveFailures: state.consecutiveFailures });
       setStatus(`Blocked ${Math.ceil(backoffMs / 1000)}s: ${message}`);
       return false;
     } finally {
@@ -956,23 +1162,25 @@
 
   const exportSession = () => {
     const payload = {
-      schema: 'auto-driller-session/v1',
+      schema: 'more-show-progress-session/v2',
       version: VERSION,
       exportedAt: new Date().toISOString(),
       platform: platform.id,
       url: location.href,
       config: { ...config },
-      state: { drillCount: state.drillCount, startedAt: new Date(state.startedAt).toISOString() },
+      state: { drillCount: state.drillCount, startedAt: new Date(state.startedAt).toISOString(), lastRoute: state.lastRoute, lastProgressScore: state.lastProgressScore, lastProgressClass: state.lastProgressClass, sameProgressFailureCount: state.sameProgressFailureCount },
       history: state.history,
       contextMemory: state.contextMemory,
       lastContextPacket: state.lastContextPacket,
+      lastMission: state.lastMission,
+      progressReceipts: state.progressReceipts,
       audit: state.audit
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `auto-driller-${platform.id}-${Date.now()}.json`;
+    anchor.download = `more-show-${platform.id}-${Date.now()}.json`;
     anchor.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     audit('session.exported');
@@ -984,6 +1192,12 @@
     state.drillCount = 0;
     state.lastDrillAt = 0;
     state.consecutiveFailures = 0;
+    state.sameProgressFailureCount = 0;
+    state.lastProgressScore = null;
+    state.lastProgressClass = 'UNASSESSED';
+    state.lastRoute = 'NONE';
+    state.lastMission = null;
+    state.progressReceipts = [];
     state.backoffUntil = 0;
     state.history = [];
     state.audit = [];
@@ -1049,21 +1263,23 @@
       </style>
       <div id="panel">
         <div id="header">
-          <div id="title">Auto Driller — ${platform.name}<span id="version">v${VERSION}</span></div>
+          <div id="title">MoreShow Progress Engine — ${platform.name}<span id="version">v${VERSION}</span></div>
           <button id="minimize" title="Minimize">−</button>
         </div>
         <div id="body">
           <div class="row"><label>Enabled</label><input id="enabled" type="checkbox"></div>
           <div class="row"><label>Auto drill</label><input id="autoDrill" type="checkbox" ${platform.manualOnly ? 'disabled' : ''}></div>
           <div class="row"><label>Safe auto-accept</label><input id="autoAccept" type="checkbox" ${platform.approval ? '' : 'disabled'}></div>
-          <div class="row"><label>Max depth</label><input id="maxDepth" type="number" min="1" max="50"></div>
+          <div class="row"><label>Max missions</label><input id="maxDepth" type="number" min="1" max="50"></div>
           <div class="row"><label>Interval (seconds)</label><input id="interval" type="number" min="3" max="120" step="1"></div>
+          <div class="row"><label>Fresh sources for tech</label><input id="freshSources" type="checkbox"></div>
+          <div class="row"><label>Min progress score</label><input id="minProgress" type="number" min="20" max="95"></div>
           ${platform.manualOnly ? '<div class="notice">Notion runs in manual-only mode to avoid typing into ordinary pages.</div>' : ''}
           ${platform.approval ? '' : '<div class="notice">Auto-accept stays disabled until this provider has an explicit approval adapter.</div>'}
           <div id="status">Starting</div>
-          <div id="stats"><span id="count">0 drills</span><span id="platform">${platform.id}</span></div>
+          <div id="stats"><span id="count">0 missions</span><span id="progress">progress n/a</span><span id="platform">${platform.id}</span></div>
           <div id="actions">
-            <button id="drillNow" class="action primary">Drill current response</button>
+            <button id="drillNow" class="action primary">Advance current response</button>
             <button id="reset" class="action">Reset</button>
             <button id="export" class="action">Export audit</button>
           </div>
@@ -1077,6 +1293,8 @@
     byId('autoAccept').checked = config.autoAccept;
     byId('maxDepth').value = String(config.maxDrillDepth);
     byId('interval').value = String(Math.round(config.drillIntervalMs / 1000));
+    byId('freshSources').checked = config.requireFreshSources;
+    byId('minProgress').value = String(config.minimumProgressScore);
 
     const bindBoolean = (id, key) => byId(id).addEventListener('change', (event) => {
       config[key] = Boolean(event.target.checked);
@@ -1089,6 +1307,7 @@
     bindBoolean('enabled', 'enabled');
     bindBoolean('autoDrill', 'autoDrill');
     bindBoolean('autoAccept', 'autoAccept');
+    bindBoolean('freshSources', 'requireFreshSources');
 
     byId('maxDepth').addEventListener('change', (event) => {
       config.maxDrillDepth = Math.max(1, Math.min(50, Number(event.target.value) || DEFAULTS.maxDrillDepth));
@@ -1097,9 +1316,14 @@
       updateHud();
     });
     byId('interval').addEventListener('change', (event) => {
-      const seconds = Math.max(3, Math.min(120, Number(event.target.value) || 7));
+      const seconds = Math.max(3, Math.min(120, Number(event.target.value) || 9));
       config.drillIntervalMs = seconds * 1000;
       event.target.value = String(seconds);
+      persistConfig();
+    });
+    byId('minProgress').addEventListener('change', (event) => {
+      config.minimumProgressScore = Math.max(20, Math.min(95, Number(event.target.value) || DEFAULTS.minimumProgressScore));
+      event.target.value = String(config.minimumProgressScore);
       persistConfig();
     });
     byId('drillNow').addEventListener('click', () => void submitDrill({ manual: true }));
@@ -1144,7 +1368,9 @@
   const updateHud = () => {
     if (!state.shadow) return;
     const count = state.shadow.getElementById('count');
-    if (count) count.textContent = `${state.drillCount}/${config.maxDrillDepth} drills`;
+    const progress = state.shadow.getElementById('progress');
+    if (count) count.textContent = `${state.drillCount}/${config.maxDrillDepth} missions`;
+    if (progress) progress.textContent = `progress ${state.lastProgressScore ?? 'n/a'} • ${state.lastProgressClass}`;
   };
 
   const registerTrustedActivity = (event) => {
@@ -1159,8 +1385,14 @@
     state.operationGeneration += 1;
     state.drillCount = 0;
     state.consecutiveFailures = 0;
+    state.sameProgressFailureCount = 0;
+    state.lastProgressScore = null;
+    state.lastProgressClass = 'UNASSESSED';
+    state.lastRoute = 'NONE';
+    state.lastMission = null;
     state.backoffUntil = 0;
     state.lastHandledHash = '';
+    state.lastHumanUserHash = '';
     state.candidateHash = '';
     state.candidateSince = Date.now();
     clearTimeout(state.baselineTimer);
@@ -1218,19 +1450,19 @@
     for (const eventName of ['pointerdown', 'keydown', 'input', 'paste']) {
       document.addEventListener(eventName, registerTrustedActivity, true);
     }
-    gmRegisterMenuCommand('Auto Driller: Toggle panel', () => {
+    gmRegisterMenuCommand('MoreShow: Toggle panel', () => {
       if (!state.hudHost) return;
       state.hudHost.style.display = state.hudHost.style.display === 'none' ? 'block' : 'none';
     });
-    gmRegisterMenuCommand('Auto Driller: Drill now', () => void submitDrill({ manual: true }));
-    gmRegisterMenuCommand('Auto Driller: Toggle auto drill', () => {
+    gmRegisterMenuCommand('MoreShow: Advance now', () => void submitDrill({ manual: true }));
+    gmRegisterMenuCommand('MoreShow: Toggle auto advance', () => {
       if (platform.manualOnly) return;
       config.autoDrill = !config.autoDrill;
       persistConfig();
       if (state.shadow) state.shadow.getElementById('autoDrill').checked = config.autoDrill;
       audit('config.changed', { key: 'autoDrill', value: config.autoDrill });
     });
-    gmRegisterMenuCommand('Auto Driller: Emergency stop', () => {
+    gmRegisterMenuCommand('MoreShow: Emergency stop', () => {
       state.operationGeneration += 1;
       config.enabled = false;
       config.autoDrill = false;
@@ -1255,13 +1487,13 @@
   };
 
   try {
-    console.info(`[AutoDriller:${platform.id}] booting v${VERSION}`, location.href);
+    console.info(`[MoreShow:${platform.id}] booting v${VERSION}`, location.href);
     init();
   } catch (error) {
-    console.error('[AutoDriller] boot failure', error);
+    console.error('[MoreShow] boot failure', error);
     const failure = document.createElement('div');
     failure.id = `${HUD_ID}-failure`;
-    failure.textContent = `Auto Driller v${VERSION} failed: ${error instanceof Error ? error.message : String(error)}`;
+    failure.textContent = `MoreShow v${VERSION} failed: ${error instanceof Error ? error.message : String(error)}`;
     failure.style.cssText = 'position:fixed;left:8px;right:8px;bottom:8px;z-index:2147483647;padding:10px;border-radius:8px;background:#7f1d1d;color:white;font:12px system-ui;word-break:break-word';
     document.documentElement.appendChild(failure);
   }

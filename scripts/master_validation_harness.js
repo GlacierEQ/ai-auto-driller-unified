@@ -1,6 +1,6 @@
 /* eslint-env node */
 /**
- * Auto Driller Master v5.1.1 validation harness.
+ * MoreShow / Auto Driller Master v6.0.0 validation harness.
  * Static and contract-level checks that run without a browser.
  */
 'use strict';
@@ -111,12 +111,12 @@ test('input drivers cover framework and contenteditable controls', () => {
 });
 
 test('actions are verified exactly once before counting success', () => {
-  includes('Prompt injection could not be verified');
-  includes('Submission could not be verified');
+  includes('Mission injection could not be verified');
+  includes('Mission submission could not be verified');
   includes('verifySubmissionStarted');
   assert(occurrences('state.drillCount += 1') === 1, 'Drill count must have exactly one increment site');
   const countIndex = source.indexOf('state.drillCount += 1');
-  const verifyIndex = source.indexOf("if (!started) throw new Error('Submission could not be verified')");
+  const verifyIndex = source.indexOf("if (!started) throw new Error('Mission submission could not be verified')");
   assert(countIndex > verifyIndex, 'Drill count must increment only after verification');
 });
 
@@ -162,7 +162,7 @@ test('SPA route changes are guarded against stale baselines', () => {
 });
 
 test('audit export, retention, and emergency stop exist', () => {
-  includes("schema: 'auto-driller-session/v1'");
+  includes("schema: 'more-show-progress-session/v2'");
   includes('runtime.emergency-stop');
   includes('Export audit');
   includes('state.audit.length > 250');
@@ -243,8 +243,8 @@ test('context lens is retrieval-first and user-message seeded', () => {
   includes('extractKeywords');
   includes('buildContextPacket');
   includes('requestCorpusContext');
-  includes('await generateQuestion(responseText)');
-  includes('Before answering, search the available prior conversation/export history for:');
+  includes('await generateMission(responseText, previousOutcome, freshHumanUserText)');
+  includes('CONTEXT RECOVERY REQUIREMENT:');
   includes("source: corpus.matches.length ? 'bridge' : 'local'");
 });
 
@@ -260,7 +260,7 @@ test('corpus bridge is optional and bounded', () => {
   assert((entries.get('@connect') || []).includes('127.0.0.1'), 'Missing 127.0.0.1 corpus bridge connect');
   assert((entries.get('@connect') || []).includes('localhost'), 'Missing localhost corpus bridge connect');
   includes("corpusBridgeUrl: 'http://127.0.0.1:8765/search'");
-  includes('corpusTimeoutMs: 1800');
+  includes('corpusTimeoutMs: 2200');
   includes("return Promise.resolve({ status: 'unavailable', matches: [] })");
   includes("onerror: () => finish({ status: 'error', matches: [] })");
   includes("ontimeout: () => finish({ status: 'timeout', matches: [] })");
@@ -276,6 +276,69 @@ test('context memory enriches questions without replacing source', () => {
 
 test('script byte size remains bounded', () => {
   assert(Buffer.byteLength(source, 'utf8') < 100_000, 'Master userscript exceeds 100 KB');
+});
+
+
+test('v6 is progress-first rather than random-question driven', () => {
+  includes("const VERSION = '6.0.0'");
+  includes("const MISSION_PREFIX = '[MORE-SHOW MISSION v6]'");
+  assert(!source.includes('const DRILL_PATTERNS'), 'Legacy static drill templates must be removed');
+  assert(!source.includes('const PATTERN_WEIGHTS'), 'Legacy weighted drill categories must be removed');
+  assert(!source.includes('const weightedChoice'), 'Random route selection must be removed');
+  includes('const candidateRoutes =');
+  includes('const compileMission =');
+  includes('const generateMission =');
+});
+
+test('context recovery is a hard invariant and migrates legacy state', () => {
+  includes("const LEGACY_STORE_KEY = 'auto-driller-master:v5'");
+  includes('config.contextAwareDrill = true');
+  includes('config.corpusRetrieval = true');
+  includes('LEGACY_STORE_KEY');
+});
+
+test('coding route requires current primary-source frontier enrichment', () => {
+  includes('TECHNICAL_FRONTIER');
+  includes('CURRENT PRIMARY SOURCES');
+  includes('official specifications');
+  includes('release notes/changelogs');
+  includes('upstream source repositories');
+  includes('requiresFreshSources');
+});
+
+test('user-reported or repeated failure forces architecture repair', () => {
+  includes('userCorrection');
+  includes('sameProgressFailureCount');
+  includes('sameFailureEscalation');
+  includes('REPAIR_ARCHITECTURE');
+  includes('invalidates the current route');
+  includes('materially different mechanism');
+});
+
+test('submission dispatch is not counted as progress', () => {
+  includes('evaluatePreviousMissionOutcome');
+  includes("audit('progress.assessed'");
+  includes("audit('mission.dispatched'");
+  const submitted = source.indexOf("audit('mission.dispatched'");
+  const evaluator = source.indexOf('const evaluatePreviousMissionOutcome');
+  assert(evaluator >= 0 && submitted > evaluator, 'Progress evaluator must exist independently of dispatch');
+  const dispatchSlice = source.slice(Math.max(0, submitted - 500), submitted + 500);
+  assert(!dispatchSlice.includes('state.lastProgressScore ='), 'Dispatch must not directly award a progress score');
+});
+
+test('verified completion compounds before frontier expansion and STOP is supported', () => {
+  includes("if (route === 'INTEGRATE' && signals.completionEvidence && signals.verificationEvidence) score += 70");
+  includes("if (route === 'TECHNICAL_FRONTIER' && signals.completionEvidence && signals.verificationEvidence) score -= 55");
+  includes("add('STOP'");
+  includes('Continuation is not intrinsically valuable.');
+});
+
+test('mission contract requires execution, falsification/readback, preservation, and no generic continuation', () => {
+  includes('Execute the selected route NOW');
+  includes('Verify/falsify the resulting real state');
+  includes('Preserve what changed');
+  includes('Do not ask a generic follow-up question');
+  includes('Meta-language about progress does not count as progress');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
